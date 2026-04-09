@@ -37,6 +37,27 @@ class ImpactTests(unittest.TestCase):
         res = impact(self.repo, "nope_nope_nope_xyz")
         self.assertEqual(res.kind, "not_found")
 
+    def test_impact_for_method_via_dotted_name(self) -> None:
+        """`GreetingService.greet` must resolve via parent_qname suffix
+        and report the method's actual call sites."""
+        res = impact(self.repo, "GreetingService.greet")
+        self.assertEqual(res.kind, "symbol")
+        self.assertTrue(
+            res.qualified_name.endswith("GreetingService.greet"),
+            f"expected GreetingService.greet, got {res.qualified_name}",
+        )
+        # app.py:main calls svc.greet → after parser rewrite → resolved
+        caller_qnames = {q for q, _, _ in res.direct_callers}
+        self.assertTrue(
+            any("main" in q for q in caller_qnames),
+            f"expected main as a caller; got {caller_qnames}",
+        )
+
+    def test_impact_for_method_with_module_prefix(self) -> None:
+        res = impact(self.repo, "service.GreetingService.greet")
+        self.assertEqual(res.kind, "symbol")
+        self.assertEqual(res.qualified_name, "service.GreetingService.greet")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,7 +31,7 @@ class ContextResult:
 
 
 def _resolve_target(conn, target: str) -> tuple[str, dict] | None:
-    # 1. qualified name
+    # 1. exact qualified name
     row = conn.execute(
         "SELECT s.*, f.rel_path FROM symbol s JOIN file f ON f.file_id=s.file_id "
         "WHERE s.qualified_name = ? LIMIT 1",
@@ -39,6 +39,35 @@ def _resolve_target(conn, target: str) -> tuple[str, dict] | None:
     ).fetchone()
     if row:
         return "symbol", dict(row)
+
+    # 1b. qualified_name suffix — `GreetingService.greet` matches
+    # `service.GreetingService.greet` and similar trailing forms.
+    if "." in target:
+        row = conn.execute(
+            "SELECT s.*, f.rel_path FROM symbol s "
+            "JOIN file f ON f.file_id=s.file_id "
+            "WHERE s.qualified_name LIKE ? "
+            "ORDER BY length(s.qualified_name) LIMIT 1",
+            ("%." + target,),
+        ).fetchone()
+        if row:
+            return "symbol", dict(row)
+        # 1c. `Class.method` → method by parent_qname suffix.
+        cls_part, method_part = target.rsplit(".", 1)
+        row = conn.execute(
+            """
+            SELECT s.*, f.rel_path FROM symbol s
+              JOIN file f ON f.file_id = s.file_id
+             WHERE s.name = ?
+               AND (s.parent_qname = ?
+                    OR s.parent_qname LIKE ?)
+               AND s.kind IN ('method', 'function', 'class')
+             ORDER BY s.is_private, s.kind LIMIT 1
+            """,
+            (method_part, cls_part, "%." + cls_part),
+        ).fetchone()
+        if row:
+            return "symbol", dict(row)
 
     # 2. symbol name
     row = conn.execute(

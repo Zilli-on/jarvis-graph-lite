@@ -162,13 +162,21 @@ def _resolve_imports(conn) -> None:
 def _resolve_calls(conn) -> None:
     """Best-effort: link `call_edge.callee_name` to a known symbol.
 
-    Three strategies, in order of confidence:
-      b) `bar`     → same-file symbol with `name = 'bar'`.
-      c) `bar`     → cross-module symbol where the caller's file has an
-                      `import_edge` with `imported_name = 'bar'` and a resolved
-                      target file. Covers `from X import bar; bar()`.
-      a) `foo.bar` → last segment `bar` resolved against a symbol in a file
-                      reachable via caller's file imports.
+    Strategies, in order of confidence:
+      b)  `bar`             → same-file symbol with `name = 'bar'`.
+      c)  `bar`             → cross-module symbol where the caller's file has
+                               an `import_edge` with `imported_name = 'bar'`
+                               and a resolved target file.
+                               Covers `from X import bar; bar()`.
+      m1) `Cls.method`      → method whose `parent_qname` ends in `.Cls` (or
+                               equals `Cls`) and the caller imports `Cls`.
+                               Covers `var = Cls(); var.method()` after the
+                               parser has already rewritten `var.method` →
+                               `Cls.method`.
+      m2) `Cls.method`      → same-file class method (Cls defined in caller's
+                               own file). Covers `self.method()` rewrites.
+      a)  `foo.bar`         → last segment `bar` resolved against a symbol in
+                               a file reachable via caller's file imports.
     """
     # (b) same-file resolution — cheap and safe.
     conn.execute(
@@ -204,6 +212,68 @@ def _resolve_calls(conn) -> None:
            )
          WHERE resolved_symbol_id IS NULL
            AND instr(call_edge.callee_name, '.') = 0
+        """
+    )
+    # (m1) `Cls.method` where Cls is imported into the caller's file.
+    # Stronger than the generic dotted path because we filter by `parent_qname`,
+    # so we land on the *right* method when multiple classes share a name.
+    conn.execute(
+        """
+        UPDATE call_edge
+           SET resolved_symbol_id = (
+               SELECT s.symbol_id
+                 FROM symbol s
+                 JOIN file f         ON f.file_id = s.file_id
+                 JOIN symbol caller  ON caller.symbol_id = call_edge.caller_symbol_id
+                 JOIN import_edge ie ON ie.file_id = caller.file_id
+                                    AND ie.resolved_file_id = f.file_id
+                                    AND ie.imported_name = substr(
+                                        call_edge.callee_name, 1,
+                                        instr(call_edge.callee_name, '.') - 1)
+                WHERE s.kind IN ('method', 'function')
+                  AND s.name = substr(
+                      call_edge.callee_name,
+                      instr(call_edge.callee_name, '.') + 1)
+                  AND (
+                      s.parent_qname = ie.imported_name
+                      OR s.parent_qname LIKE '%.' || ie.imported_name
+                  )
+                LIMIT 1
+           )
+         WHERE resolved_symbol_id IS NULL
+           AND instr(call_edge.callee_name, '.') > 0
+           AND length(call_edge.callee_name)
+               - length(replace(call_edge.callee_name, '.', '')) = 1
+        """
+    )
+    # (m2) `Cls.method` where Cls is defined in the caller's own file.
+    # Covers `self.method()` rewrites: same-file class without an import.
+    conn.execute(
+        """
+        UPDATE call_edge
+           SET resolved_symbol_id = (
+               SELECT s.symbol_id
+                 FROM symbol s
+                 JOIN symbol caller ON caller.symbol_id = call_edge.caller_symbol_id
+                WHERE s.file_id = caller.file_id
+                  AND s.kind IN ('method', 'function')
+                  AND s.name = substr(
+                      call_edge.callee_name,
+                      instr(call_edge.callee_name, '.') + 1)
+                  AND (
+                      s.parent_qname = substr(
+                          call_edge.callee_name, 1,
+                          instr(call_edge.callee_name, '.') - 1)
+                      OR s.parent_qname LIKE '%.' || substr(
+                          call_edge.callee_name, 1,
+                          instr(call_edge.callee_name, '.') - 1)
+                  )
+                LIMIT 1
+           )
+         WHERE resolved_symbol_id IS NULL
+           AND instr(call_edge.callee_name, '.') > 0
+           AND length(call_edge.callee_name)
+               - length(replace(call_edge.callee_name, '.', '')) = 1
         """
     )
     # (a) dotted resolution via imports.

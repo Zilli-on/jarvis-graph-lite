@@ -59,13 +59,70 @@ def _callee_name(node: ast.AST) -> str | None:
     return None
 
 
-def _walk_calls(body_nodes: list[ast.stmt], caller_qname: str) -> list[ParsedCall]:
+def _collect_local_types(body_nodes: list[ast.stmt]) -> dict[str, str]:
+    """Pre-scan a function body for `var = ClassName(...)` assignments.
+
+    Returns a dict ``{var_name: class_basename}``. Conservative: only handles
+    simple Name targets and Name/Attribute callees, AND only when the callee
+    basename starts with an uppercase letter (PEP-8 class naming). The latter
+    filters out things like ``conn = sqlite3.connect()`` or ``cursor =
+    conn.cursor()`` that would otherwise produce nonsense rewrites.
+
+    Walks the full body (incl. nested blocks) — same scope semantics as
+    ``_walk_calls`` itself. An inner-function reassignment of ``s`` will
+    shadow the outer one, which matches the same limitation that already
+    exists for call attribution.
+    """
+    types: dict[str, str] = {}
+    for n in body_nodes:
+        for sub in ast.walk(n):
+            if not isinstance(sub, ast.Assign) or not isinstance(sub.value, ast.Call):
+                continue
+            cls_name = _callee_name(sub.value.func)
+            if not cls_name:
+                continue
+            cls_base = cls_name.rsplit(".", 1)[-1]
+            if not cls_base or not cls_base[0].isupper():
+                continue
+            for tgt in sub.targets:
+                if isinstance(tgt, ast.Name):
+                    types[tgt.id] = cls_base
+    return types
+
+
+def _rewrite_callee(
+    name: str,
+    local_types: dict[str, str],
+    enclosing_class: str | None,
+) -> str:
+    """Rewrite ``var.method`` and ``self.method`` into ``ClassName.method``.
+
+    Only the head segment is touched; the rest of a longer attribute chain
+    is preserved verbatim.
+    """
+    head, sep, rest = name.partition(".")
+    if not sep:
+        return name
+    if head in local_types:
+        return f"{local_types[head]}.{rest}"
+    if head == "self" and enclosing_class:
+        return f"{enclosing_class}.{rest}"
+    return name
+
+
+def _walk_calls(
+    body_nodes: list[ast.stmt],
+    caller_qname: str,
+    enclosing_class: str | None = None,
+) -> list[ParsedCall]:
+    local_types = _collect_local_types(body_nodes)
     out: list[ParsedCall] = []
     for n in body_nodes:
         for sub in ast.walk(n):
             if isinstance(sub, ast.Call):
                 name = _callee_name(sub.func)
                 if name:
+                    name = _rewrite_callee(name, local_types, enclosing_class)
                     out.append(
                         ParsedCall(
                             caller_qname=caller_qname,
@@ -210,7 +267,9 @@ def parse_python_file(abs_path: Path, rel_path: Path) -> ParsedFile:
                             parent_qname=cls_qname,
                         )
                     )
-                    pf.calls.extend(_walk_calls(cn.body, m_qname))
+                    pf.calls.extend(
+                        _walk_calls(cn.body, m_qname, enclosing_class=node.name)
+                    )
         elif isinstance(node, ast.Assign):
             # Capture module-level UPPER_CASE constants only — keeps the index small.
             for tgt in node.targets:

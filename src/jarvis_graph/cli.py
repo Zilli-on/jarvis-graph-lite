@@ -1,16 +1,22 @@
-"""jarvis-graph CLI: index / query / context / impact / detect_changes / summary.
+"""jarvis-graph CLI: index / query / context / impact / detect_changes / summary
+plus the v0.2 health-check engines (find_dead_code, find_unused_imports,
+find_circular_deps).
 
 Usage:
     jarvis-graph index <repo>            # incremental
     jarvis-graph index <repo> --full     # wipe + rebuild
-    jarvis-graph query <repo> "<question>" [--limit N]
+    jarvis-graph query <repo> "<question>" [--limit N] [--match-all]
     jarvis-graph context <repo> <symbol-or-file>
-    jarvis-graph impact <repo> <symbol-or-file>
+    jarvis-graph impact  <repo> <symbol-or-file>
     jarvis-graph detect_changes <repo>
     jarvis-graph summary <repo>
+    jarvis-graph find_dead_code      <repo>
+    jarvis-graph find_unused_imports <repo>
+    jarvis-graph find_circular_deps  <repo>
 
-All output is plain text by default; pass --json to any subcommand to get
-a structured payload (handy for scripts and other agents).
+All output is plain text by default; pass --json to any subcommand to get a
+structured payload (handy for scripts and other agents). ANSI colour is on
+when stdout is a TTY; disable with `--no-color` or `NO_COLOR=1`.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -32,13 +39,75 @@ if sys.platform == "win32":
         except (AttributeError, ValueError):
             pass
 
+
+# --- ANSI colour helpers --------------------------------------------------
+# Honour NO_COLOR (https://no-color.org/) and skip colour when not a TTY,
+# unless --color is explicitly forced. Each helper is a no-op when colour
+# is disabled, so the formatting strings stay clean.
+
+class _Style:
+    enabled: bool = False
+
+    @classmethod
+    def configure(cls, mode: str) -> None:
+        if mode == "always":
+            cls.enabled = True
+            return
+        if mode == "never":
+            cls.enabled = False
+            return
+        # "auto"
+        if os.environ.get("NO_COLOR"):
+            cls.enabled = False
+            return
+        cls.enabled = sys.stdout.isatty()
+
+
+def _c(code: str, text: str) -> str:
+    if not _Style.enabled:
+        return text
+    return f"\x1b[{code}m{text}\x1b[0m"
+
+
+def bold(t: str) -> str:    return _c("1", t)
+def dim(t: str) -> str:     return _c("2", t)
+def red(t: str) -> str:     return _c("31", t)
+def green(t: str) -> str:   return _c("32", t)
+def yellow(t: str) -> str:  return _c("33", t)
+def blue(t: str) -> str:    return _c("34", t)
+def magenta(t: str) -> str: return _c("35", t)
+def cyan(t: str) -> str:    return _c("36", t)
+
+
+_RISK_COLOR = {"low": green, "medium": yellow, "high": red}
+_KIND_COLOR = {
+    "function": cyan,
+    "method":   cyan,
+    "class":    magenta,
+    "constant": yellow,
+    "module":   dim,
+    "file":     blue,
+}
+
+
+def _kind(s: str) -> str:
+    fn = _KIND_COLOR.get(s)
+    return fn(s) if fn else s
+
+
+def _path(s: str) -> str:
+    return blue(s)
+
 from jarvis_graph import __version__
 from jarvis_graph.change_detector import detect_changes
+from jarvis_graph.circular_deps_engine import find_circular_deps
 from jarvis_graph.context_engine import context as run_context
+from jarvis_graph.dead_code_engine import find_dead_code
 from jarvis_graph.impact_engine import impact as run_impact
 from jarvis_graph.indexer import index_repo
 from jarvis_graph.query_engine import query as run_query
 from jarvis_graph.repo_summary import summarize
+from jarvis_graph.unused_imports_engine import find_unused_imports
 
 
 def _print_json(obj) -> None:
@@ -67,20 +136,23 @@ def _cmd_index(args) -> int:
 
 def _cmd_query(args) -> int:
     repo = Path(args.repo)
-    hits = run_query(repo, args.question, limit=args.limit)
+    hits = run_query(repo, args.question, limit=args.limit, match_all=args.match_all)
     if args.json:
         _print_json([asdict(h) for h in hits])
         return 0
     if not hits:
-        print("(no hits)")
+        print(dim("(no hits)"))
         return 0
-    print(f"{len(hits)} hit(s) for: {args.question}")
+    print(bold(f"{len(hits)} hit(s) for: {args.question}"))
     for h in hits:
         loc = f"{h.rel_path}:{h.lineno}" if h.lineno else h.rel_path
-        qn = f" ({h.qualified_name})" if h.qualified_name and h.qualified_name != h.name else ""
-        print(f"  [{h.score:>3}] {h.kind:<8} {h.name}{qn}  -> {loc}")
+        qn = f" ({dim(h.qualified_name)})" if h.qualified_name and h.qualified_name != h.name else ""
+        print(
+            f"  [{bold(str(h.score).rjust(3))}] "
+            f"{_kind(h.kind):<8} {bold(h.name)}{qn}  -> {_path(loc)}"
+        )
         if h.snippet:
-            print(f"        {h.snippet}")
+            print(f"        {dim(h.snippet)}")
     return 0
 
 
@@ -149,28 +221,32 @@ def _cmd_impact(args) -> int:
         print(f"(no symbol or file matching: {args.target})")
         return 1
 
-    print(f"impact: {args.target} ({res.kind})  risk={res.risk.upper()}")
-    print(f"  file:        {res.rel_path}")
+    risk_painter = _RISK_COLOR.get(res.risk, dim)
+    print(
+        f"{bold('impact:')} {args.target} "
+        f"({_kind(res.kind)})  risk={risk_painter(res.risk.upper())}"
+    )
+    print(f"  file:        {_path(res.rel_path)}")
     if res.qualified_name:
-        print(f"  qname:       {res.qualified_name}")
-    print(f"  direct callers:   {len(res.direct_callers)}")
+        print(f"  qname:       {dim(res.qualified_name)}")
+    print(f"  direct callers:   {bold(str(len(res.direct_callers)))}")
     for q, p, ln in res.direct_callers[:15]:
-        print(f"    - {q}  ({p}:{ln})")
+        print(f"    - {q}  ({_path(f'{p}:{ln}')})")
     if len(res.direct_callers) > 15:
-        print(f"    ... +{len(res.direct_callers) - 15} more")
-    print(f"  direct importers: {len(res.direct_importers)}")
+        print(dim(f"    ... +{len(res.direct_callers) - 15} more"))
+    print(f"  direct importers: {bold(str(len(res.direct_importers)))}")
     for p in res.direct_importers[:15]:
-        print(f"    - {p}")
+        print(f"    - {_path(p)}")
     if len(res.direct_importers) > 15:
-        print(f"    ... +{len(res.direct_importers) - 15} more")
-    print(f"  second-order:     {len(res.second_order)}")
+        print(dim(f"    ... +{len(res.direct_importers) - 15} more"))
+    print(f"  second-order:     {bold(str(len(res.second_order)))}")
     for s in res.second_order[:15]:
         print(f"    - {s}")
     if len(res.second_order) > 15:
-        print(f"    ... +{len(res.second_order) - 15} more")
+        print(dim(f"    ... +{len(res.second_order) - 15} more"))
     print("  why:")
     for reason in res.why:
-        print(f"    - {reason}")
+        print(f"    - {dim(reason)}")
     return 0
 
 
@@ -201,6 +277,77 @@ def _cmd_detect_changes(args) -> int:
         print(f"    ... +{len(rep.removed) - 20} more")
     print(f"  recommendation: {rep.recommendation}")
     print(f"  reason:         {rep.reason}")
+    return 0
+
+
+def _cmd_find_dead_code(args) -> int:
+    repo = Path(args.repo)
+    rep = find_dead_code(repo)
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_dead_code: {repo.resolve()}"))
+    print(
+        dim(
+            f"  checked={rep.total_checked} "
+            f"excluded(dunder={rep.excluded_dunder} private={rep.excluded_private} "
+            f"entrypoint={rep.excluded_entrypoint} test={rep.excluded_test} "
+            f"textual={rep.excluded_textual})"
+        )
+    )
+    paint = red if rep.dead else green
+    print(f"  dead candidates: {paint(str(len(rep.dead)))}")
+    for d in rep.dead[: args.limit]:
+        print(
+            f"    - {_kind(d.kind):<8} {bold(d.qualified_name)}  "
+            f"({_path(f'{d.rel_path}:{d.lineno}')})"
+        )
+    if len(rep.dead) > args.limit:
+        print(dim(f"    ... +{len(rep.dead) - args.limit} more"))
+    return 0
+
+
+def _cmd_find_unused_imports(args) -> int:
+    repo = Path(args.repo)
+    rep = find_unused_imports(repo)
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_unused_imports: {repo.resolve()}"))
+    print(dim(f"  total imports: {rep.total_imports}"))
+    paint = red if rep.unused else green
+    print(f"  unused:        {paint(str(len(rep.unused)))}")
+    for u in rep.unused[: args.limit]:
+        if u.imported_name:
+            stmt = f"from {u.imported_module} import {u.imported_name}"
+            if u.alias:
+                stmt += f" as {u.alias}"
+        else:
+            stmt = f"import {u.imported_module}"
+            if u.alias:
+                stmt += f" as {u.alias}"
+        print(f"    - {_path(f'{u.rel_path}:{u.lineno}')}  {stmt}")
+    if len(rep.unused) > args.limit:
+        print(dim(f"    ... +{len(rep.unused) - args.limit} more"))
+    return 0
+
+
+def _cmd_find_circular_deps(args) -> int:
+    repo = Path(args.repo)
+    rep = find_circular_deps(repo)
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_circular_deps: {repo.resolve()}"))
+    print(dim(f"  files: {rep.total_files}  edges: {rep.total_edges}"))
+    paint = red if rep.cycles else green
+    print(f"  cycles found: {paint(str(len(rep.cycles)))}")
+    for i, c in enumerate(rep.cycles[: args.limit], 1):
+        print(f"  [{bold(str(i))}] size={c.size}")
+        for f in c.files:
+            print(f"      - {_path(f)}")
+    if len(rep.cycles) > args.limit:
+        print(dim(f"    ... +{len(rep.cycles) - args.limit} more"))
     return 0
 
 
@@ -235,6 +382,19 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Lightweight local code-intelligence index (stdlib only).",
     )
     p.add_argument("--version", action="version", version=f"jarvis-graph {__version__}")
+    p.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="ANSI colour: auto (TTY), always, never. Honours $NO_COLOR.",
+    )
+    p.add_argument(
+        "--no-color",
+        dest="color",
+        action="store_const",
+        const="never",
+        help="alias for --color never",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("index", help="Index (or re-index) a repo")
@@ -247,6 +407,12 @@ def _build_parser() -> argparse.ArgumentParser:
     pq.add_argument("repo")
     pq.add_argument("question")
     pq.add_argument("--limit", type=int, default=20)
+    pq.add_argument(
+        "--match-all", "--and",
+        dest="match_all",
+        action="store_true",
+        help="strict AND across keywords; default is soft AND with multi-token bonus",
+    )
     pq.add_argument("--json", action="store_true")
     pq.set_defaults(func=_cmd_query)
 
@@ -272,12 +438,31 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--json", action="store_true")
     ps.set_defaults(func=_cmd_summary)
 
+    pdc = sub.add_parser("find_dead_code", help="List functions/classes/methods with no callers")
+    pdc.add_argument("repo")
+    pdc.add_argument("--limit", type=int, default=50)
+    pdc.add_argument("--json", action="store_true")
+    pdc.set_defaults(func=_cmd_find_dead_code)
+
+    pui = sub.add_parser("find_unused_imports", help="List unused import statements")
+    pui.add_argument("repo")
+    pui.add_argument("--limit", type=int, default=50)
+    pui.add_argument("--json", action="store_true")
+    pui.set_defaults(func=_cmd_find_unused_imports)
+
+    pcd = sub.add_parser("find_circular_deps", help="Detect import cycles")
+    pcd.add_argument("repo")
+    pcd.add_argument("--limit", type=int, default=20)
+    pcd.add_argument("--json", action="store_true")
+    pcd.set_defaults(func=_cmd_find_circular_deps)
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _Style.configure(getattr(args, "color", "auto"))
     try:
         return args.func(args)
     except FileNotFoundError as exc:

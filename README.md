@@ -4,14 +4,19 @@ A tiny **local** code-intelligence index for Python repos.
 Stdlib only. No embeddings. No daemons. No external services.
 Runs on Win10, Python 3.11, in seconds, on a 9-year-old i5 with 8 GB RAM.
 
-It answers four questions about a repo:
+It answers seven questions about a repo:
 
-1. **`query`** — *where does this concept live?*
+1. **`query`** — *where does this concept live?*  (with `--and` for strict AND across tokens, plus a recency boost)
 2. **`context`** — *what is this symbol or file's role?*
-3. **`impact`** — *what might break if I change this?*
+3. **`impact`** — *what might break if I change this?*  (works on classes, methods, and `Class.method` dotted names)
 4. **`detect_changes`** — *what's drifted since I last indexed?*
+5. **`find_dead_code`** — *which functions/classes/methods are never referenced anywhere?*
+6. **`find_unused_imports`** — *which imports are never used in their file?*
+7. **`find_circular_deps`** — *are there import cycles in the repo?*
 
-Plus a fifth, free helper: **`summary`** — a deterministic per-repo snapshot.
+Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
+
+Output is colorized (kind, risk level, paths) when stdout is a TTY. Use `--color always|never` or `--no-color` to override; the `NO_COLOR` env var is also honored.
 
 ---
 
@@ -45,10 +50,17 @@ python -m jarvis_graph index C:\JARVIS
 
 :: 2. find things
 python -m jarvis_graph query    C:\JARVIS "voice recognition"
+python -m jarvis_graph query    C:\JARVIS "telegram bot send" --and
 python -m jarvis_graph context  C:\JARVIS handle_voice
 python -m jarvis_graph impact   C:\JARVIS detect_backend
+python -m jarvis_graph impact   C:\JARVIS GreetingService.greet
 python -m jarvis_graph detect_changes C:\JARVIS
 python -m jarvis_graph summary  C:\JARVIS
+
+:: 3. find rot
+python -m jarvis_graph find_dead_code      C:\JARVIS --limit 20
+python -m jarvis_graph find_unused_imports C:\JARVIS --limit 20
+python -m jarvis_graph find_circular_deps  C:\JARVIS
 ```
 
 Every command accepts `--json` for machine-readable output.
@@ -82,11 +94,18 @@ Per `*.py` file:
 - **imports** — `import X`, `import X as Y`, `from X import Y`, relative imports (`from .X import Y` is recorded with leading dot levels)
 - **calls** — every `ast.Call` reachable from a function/method body or from module-level execution; the textual callee name is stored, then resolved to a real symbol id during a second pass
 
-Resolution is best-effort and uses three heuristics, in order:
+The parser performs a small amount of **local type tracking** so method calls on instance variables can be resolved:
+
+- `svc = GreetingService()` followed by `svc.greet(...)` is rewritten to `GreetingService.greet` at parse time (only when the callee starts with an uppercase letter, to avoid garbage like `conn = sqlite3.connect()` rewriting `conn.execute` → `connect.execute`).
+- `self.method(...)` inside a class body is rewritten to `ClassName.method` using the enclosing class context.
+
+Resolution is best-effort and uses five heuristics, in order:
 
 1. exact `module_path == imported_module`
 2. suffix-match (`module_path LIKE '%.X'`) **only** when exactly one candidate exists — handles flat `sys.path` layouts like `JARVIS/`
 3. for plain `from X import bar; bar()` calls, the call edge is bound to the symbol named `bar` in the resolved import target
+4. **m1**: dotted `Cls.method` where `Cls` was imported via `import_edge` — bound to the matching method symbol in the imported file
+5. **m2**: dotted `Cls.method` where `Cls` is defined in the caller's own file (covers the `self.method` rewrite path)
 
 These heuristics are wrong sometimes — see `deferred-features.md` for what's deliberately not handled.
 
@@ -95,15 +114,20 @@ These heuristics are wrong sometimes — see `deferred-features.md` for what's d
 ## CLI shape
 
 ```
-jarvis-graph index            <repo> [--full] [--json]
-jarvis-graph query            <repo> "<question>" [--limit N] [--json]
-jarvis-graph context          <repo> <symbol-or-file>     [--json]
-jarvis-graph impact           <repo> <symbol-or-file>     [--json]
-jarvis-graph detect_changes   <repo>                      [--json]
-jarvis-graph summary          <repo>                      [--json]
+jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
+
+  index               <repo> [--full] [--json]
+  query               <repo> "<question>" [--limit N] [--and] [--json]
+  context             <repo> <symbol-or-file>          [--json]
+  impact              <repo> <symbol-or-file>          [--json]
+  detect_changes      <repo>                           [--json]
+  summary             <repo>                           [--json]
+  find_dead_code      <repo> [--limit N]               [--json]
+  find_unused_imports <repo> [--limit N]               [--json]
+  find_circular_deps  <repo>                           [--json]
 ```
 
-`<symbol-or-file>` resolves in this order: exact qualified name → exact symbol name → file path substring.
+`<symbol-or-file>` resolves in this order: exact qualified name → qualified-name suffix (for dotted `Class.method`) → parent-qname suffix (for `Class.method` where `Class` is in another module) → exact symbol name → file path substring.
 
 ---
 
@@ -114,9 +138,9 @@ Tested on Windows 10, i5-6600K, 8 GB DDR4, no SSD heroics:
 | Repo            | Files | Symbols | Calls   | Full reindex |
 |-----------------|------:|--------:|--------:|-------------:|
 | `tests/sample`  |     5 |      18 |      14 |       <0.1 s |
-| `C:\JARVIS\`    |   591 |   4 589 |  28 753 |        ~3 s  |
+| `C:\JARVIS\`    |   598 |   ~4.6k |  ~29k   |        ~3 s  |
 
-Incremental reindex on the same JARVIS repo with no changes: <1 s (sha256 short-circuit).
+Incremental reindex on the same JARVIS repo with no changes: <1 s (sha256 short-circuit). `find_dead_code` on JARVIS: ~2 s (per-file token scan is the dominant cost). `find_circular_deps`: <0.5 s (Tarjan's SCC on the import graph).
 
 ---
 

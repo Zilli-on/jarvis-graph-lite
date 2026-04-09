@@ -73,6 +73,59 @@ class IndexerTests(unittest.TestCase):
         self.assertEqual(report.files_skipped_unchanged, 6)
         self.assertEqual(report.files_indexed, 0)
 
+    def test_class_instantiation_call_resolved(self) -> None:
+        """`svc = GreetingService(); svc.greet()` in app.py must be rewritten
+        to `GreetingService.greet` and resolve to the actual method."""
+        conn = connect(self.repo)
+        try:
+            row = conn.execute(
+                """
+                SELECT ce.callee_name, ce.resolved_symbol_id, s.qualified_name
+                  FROM call_edge ce
+                  JOIN symbol caller ON caller.symbol_id = ce.caller_symbol_id
+                  JOIN file f        ON f.file_id = caller.file_id
+             LEFT JOIN symbol s     ON s.symbol_id = ce.resolved_symbol_id
+                 WHERE f.rel_path = 'app.py'
+                   AND ce.callee_name = 'GreetingService.greet'
+                """
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row, "expected a greet call in app.py")
+        self.assertEqual(row["callee_name"], "GreetingService.greet")
+        self.assertIsNotNone(
+            row["resolved_symbol_id"],
+            "rewritten ClassName.method call must resolve",
+        )
+        self.assertTrue(
+            row["qualified_name"].endswith("GreetingService.greet"),
+            f"expected GreetingService.greet, got {row['qualified_name']}",
+        )
+
+    def test_self_method_call_resolved(self) -> None:
+        """`self.greet(name)` inside `GreetingService.shout` must be
+        rewritten to `GreetingService.greet` and resolve same-file."""
+        conn = connect(self.repo)
+        try:
+            row = conn.execute(
+                """
+                SELECT ce.callee_name, ce.resolved_symbol_id, s.qualified_name
+                  FROM call_edge ce
+                  JOIN symbol caller ON caller.symbol_id = ce.caller_symbol_id
+             LEFT JOIN symbol s     ON s.symbol_id = ce.resolved_symbol_id
+                 WHERE caller.qualified_name LIKE '%GreetingService.shout'
+                   AND ce.callee_name = 'GreetingService.greet'
+                """
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row, "expected a greet call in shout")
+        self.assertEqual(row["callee_name"], "GreetingService.greet")
+        self.assertIsNotNone(
+            row["resolved_symbol_id"],
+            "self.method call must resolve to same-file method",
+        )
+
     def test_function_local_import_recorded_and_resolved(self) -> None:
         """`from helpers import format_greeting` inside a function body
         must produce an import edge AND a resolved cross-module call edge."""

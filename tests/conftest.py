@@ -31,5 +31,54 @@ def prepare_sample_repo() -> tuple[Path, Path]:
     return tmp_root, dst
 
 
+def prepare_extended_repo() -> tuple[Path, Path]:
+    """Sample repo + extra files for the v0.2 health-check engines.
+
+    Adds:
+      - `dead_function.py`  — defines a function nothing calls
+      - `unused_import.py`  — imports something it never uses
+      - `cycle_a.py` / `cycle_b.py` — mutually-recursive imports
+    """
+    tmp_root, repo = prepare_sample_repo()
+
+    (repo / "dead_function.py").write_text(
+        "def really_dead() -> int:\n"
+        "    return 1\n"
+        "\n"
+        "def used_function() -> int:\n"
+        "    return 42\n"
+        "\n"
+        "# Top-level call so used_function has a caller in the index.\n"
+        "_PRELOADED = used_function()\n",
+        encoding="utf-8",
+    )
+    (repo / "unused_import.py").write_text(
+        "import os\n"
+        "from helpers import format_greeting, load_config\n"
+        "\n"
+        "def go() -> str:\n"
+        "    return format_greeting('hi')\n"
+        "\n"
+        "_RESULT = go()\n",
+        encoding="utf-8",
+    )
+    (repo / "cycle_a.py").write_text(
+        "from cycle_b import b_func\n"
+        "\n"
+        "def a_func() -> int:\n"
+        "    return b_func() + 1\n",
+        encoding="utf-8",
+    )
+    (repo / "cycle_b.py").write_text(
+        "from cycle_a import a_func\n"
+        "\n"
+        "def b_func() -> int:\n"
+        "    return a_func() + 1\n",
+        encoding="utf-8",
+    )
+    index_repo(repo, full=True)
+    return tmp_root, repo
+
+
 def cleanup(tmp_root: Path) -> None:
     shutil.rmtree(tmp_root, ignore_errors=True)

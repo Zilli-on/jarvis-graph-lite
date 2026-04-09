@@ -1,6 +1,17 @@
 # Deferred features
 
-Things that were considered and **explicitly left out** of v0.1, with the trigger that would justify adding them later.
+Things that were considered and **explicitly left out**, with the trigger that would justify adding them later.
+
+## Promoted out of this file in v0.2
+
+- **Method-level call resolution** (parser local-type rewrite + indexer m1/m2 passes). Implemented because it was blocking accurate impact analysis on class methods on JARVIS.
+- **Dead-code detection** (`find_dead_code`). Implemented with a two-stage textual filter to keep false positives near zero.
+- **Unused-import detection** (`find_unused_imports`). Implemented with import-line-stripped token scanning to keep type-only imports out of the false-positive bucket.
+- **Circular-dependency detection** (`find_circular_deps`). Tarjan's SCC over resolved import edges.
+- **Strict AND query mode + recency boost** (`query --and`). Implemented because lexical recall on multi-word questions was too noisy.
+- **ANSI color output**. Implemented because the CLI's primary consumer is now humans skimming impact/dead-code reports.
+
+## Still deferred
 
 | Feature | Why deferred | Trigger to add |
 |---|---|---|
