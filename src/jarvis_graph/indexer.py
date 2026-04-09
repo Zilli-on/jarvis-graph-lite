@@ -23,6 +23,7 @@ from pathlib import Path
 from jarvis_graph import config, logging_utils
 from jarvis_graph.db import connect
 from jarvis_graph.models import ParsedFile
+from jarvis_graph.parallel import parse_in_parallel, should_parallelize
 from jarvis_graph.parser_python import parse_python_file
 from jarvis_graph.utils import iter_python_files, now_epoch
 
@@ -73,8 +74,9 @@ def _insert_parsed_file(conn, pf: ParsedFile) -> int:
         cur = conn.execute(
             """
             INSERT INTO symbol (file_id, name, qualified_name, kind, parent_qname,
-                                lineno, end_lineno, col, docstring, signature, is_private)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                lineno, end_lineno, col, docstring, signature, is_private,
+                                complexity, line_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 file_id,
@@ -88,6 +90,8 @@ def _insert_parsed_file(conn, pf: ParsedFile) -> int:
                 sym.docstring,
                 sym.signature,
                 sym.is_private,
+                sym.complexity,
+                sym.line_count,
             ),
         )
         qname_to_id[sym.qualified_name] = int(cur.lastrowid)
@@ -310,8 +314,47 @@ def _resolve_calls(conn) -> None:
     )
 
 
-def index_repo(repo_path: Path, full: bool = False) -> IndexReport:
-    """Index (or re-index) the given repo path. `full=True` wipes the index first."""
+def _ingest_parsed(
+    conn,
+    pf: ParsedFile,
+    existing: dict[str, tuple[int, str]],
+    report: IndexReport,
+    full: bool,
+    handled: set[str],
+) -> None:
+    """Apply a single ParsedFile to the database, updating the report."""
+    rel_str = pf.rel_path
+    handled.add(rel_str)
+    prev = existing.get(rel_str)
+    if prev is not None and prev[1] == pf.sha256 and not full:
+        report.files_skipped_unchanged += 1
+        return
+    if prev is not None:
+        _delete_file_rows(conn, prev[0])
+    _insert_parsed_file(conn, pf)
+    report.files_indexed += 1
+    report.symbols_total += len(pf.symbols)
+    report.imports_total += len(pf.imports)
+    report.calls_total += len(pf.calls)
+    if pf.parse_error:
+        report.files_with_errors += 1
+
+
+def index_repo(
+    repo_path: Path,
+    full: bool = False,
+    parallel: bool | None = None,
+    max_workers: int | None = None,
+) -> IndexReport:
+    """Index (or re-index) the given repo path.
+
+    Args:
+        repo_path: directory to index.
+        full: wipe the existing index first.
+        parallel: use a process pool for parsing. ``None`` (default) auto-
+            decides based on file count; ``True``/``False`` force the path.
+        max_workers: override worker count when ``parallel`` is enabled.
+    """
     repo_path = repo_path.resolve()
     if not repo_path.exists() or not repo_path.is_dir():
         raise FileNotFoundError(f"repo not found or not a directory: {repo_path}")
@@ -329,34 +372,34 @@ def index_repo(repo_path: Path, full: bool = False) -> IndexReport:
         for row in conn.execute("SELECT file_id, rel_path, sha256 FROM file"):
             existing[row["rel_path"]] = (int(row["file_id"]), row["sha256"])
 
-        seen_rel: set[str] = set()
-        for abs_path, rel_path in iter_python_files(repo_path):
-            report.files_seen += 1
-            rel_str = str(rel_path).replace("\\", "/")
-            seen_rel.add(rel_str)
+        # Materialise the file list once — we need a count for the parallel
+        # decision and a `seen_rel` for the orphan-cleanup pass.
+        files = list(iter_python_files(repo_path))
+        report.files_seen = len(files)
+        seen_rel: set[str] = {str(r).replace("\\", "/") for _, r in files}
+        handled: set[str] = set()
 
+        use_parallel = (
+            parallel if parallel is not None else should_parallelize(len(files))
+        )
+
+        if use_parallel and files:
+            for pf in parse_in_parallel(files, max_workers=max_workers):
+                _ingest_parsed(conn, pf, existing, report, full, handled)
+
+        # Sequential pass: either the only path (small repos / forced) or a
+        # safety net for any files the pool dropped silently.
+        for abs_path, rel_path in files:
+            rel_str = str(rel_path).replace("\\", "/")
+            if rel_str in handled:
+                continue
             try:
                 pf = parse_python_file(abs_path, rel_path)
             except Exception as exc:  # noqa: BLE001 — defensive
                 report.files_with_errors += 1
                 logging_utils.log(repo_path, "parse_failed", f"{rel_str}: {exc}")
                 continue
-
-            prev = existing.get(rel_str)
-            if prev is not None and prev[1] == pf.sha256 and not full:
-                report.files_skipped_unchanged += 1
-                continue
-
-            if prev is not None:
-                _delete_file_rows(conn, prev[0])
-
-            _insert_parsed_file(conn, pf)
-            report.files_indexed += 1
-            report.symbols_total += len(pf.symbols)
-            report.imports_total += len(pf.imports)
-            report.calls_total += len(pf.calls)
-            if pf.parse_error:
-                report.files_with_errors += 1
+            _ingest_parsed(conn, pf, existing, report, full, handled)
 
         # Files that disappeared from disk → drop them.
         for rel_str, (fid, _) in existing.items():

@@ -1,6 +1,5 @@
 """jarvis-graph CLI: index / query / context / impact / detect_changes / summary
-plus the v0.2 health-check engines (find_dead_code, find_unused_imports,
-find_circular_deps).
+plus the v0.2 + v0.3 health-check engines.
 
 Usage:
     jarvis-graph index <repo>            # incremental
@@ -10,9 +9,13 @@ Usage:
     jarvis-graph impact  <repo> <symbol-or-file>
     jarvis-graph detect_changes <repo>
     jarvis-graph summary <repo>
-    jarvis-graph find_dead_code      <repo>
-    jarvis-graph find_unused_imports <repo>
-    jarvis-graph find_circular_deps  <repo>
+    jarvis-graph find_dead_code       <repo>
+    jarvis-graph find_unused_imports  <repo>
+    jarvis-graph find_circular_deps   <repo>
+    jarvis-graph find_complexity      <repo> [--threshold N] [--limit N]
+    jarvis-graph find_long_functions  <repo> [--threshold N] [--limit N]
+    jarvis-graph find_god_files       <repo> [--limit N]
+    jarvis-graph health_report        <repo> [--out FILE]
 
 All output is plain text by default; pass --json to any subcommand to get a
 structured payload (handy for scripts and other agents). ANSI colour is on
@@ -101,10 +104,14 @@ def _path(s: str) -> str:
 from jarvis_graph import __version__
 from jarvis_graph.change_detector import detect_changes
 from jarvis_graph.circular_deps_engine import find_circular_deps
+from jarvis_graph.complexity_engine import find_complexity
 from jarvis_graph.context_engine import context as run_context
 from jarvis_graph.dead_code_engine import find_dead_code
+from jarvis_graph.god_files_engine import find_god_files
+from jarvis_graph.health_report_engine import health_report as run_health_report
 from jarvis_graph.impact_engine import impact as run_impact
 from jarvis_graph.indexer import index_repo
+from jarvis_graph.long_functions_engine import find_long_functions
 from jarvis_graph.query_engine import query as run_query
 from jarvis_graph.repo_summary import summarize
 from jarvis_graph.unused_imports_engine import find_unused_imports
@@ -116,7 +123,19 @@ def _print_json(obj) -> None:
 
 def _cmd_index(args) -> int:
     repo = Path(args.repo)
-    report = index_repo(repo, full=args.full)
+    parallel: bool | None
+    if args.no_parallel:
+        parallel = False
+    elif args.parallel:
+        parallel = True
+    else:
+        parallel = None  # auto
+    report = index_repo(
+        repo,
+        full=args.full,
+        parallel=parallel,
+        max_workers=args.workers,
+    )
     if args.json:
         _print_json(asdict(report))
         return 0
@@ -351,6 +370,106 @@ def _cmd_find_circular_deps(args) -> int:
     return 0
 
 
+def _cmd_find_complexity(args) -> int:
+    repo = Path(args.repo)
+    rep = find_complexity(repo, threshold=args.threshold, limit=args.limit)
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_complexity: {repo.resolve()}"))
+    print(
+        dim(
+            f"  callables={rep.total_callables} "
+            f"avg={rep.average} "
+            f"high(11-20)={rep.high} extreme(>20)={rep.extreme}  "
+            f"threshold={args.threshold}"
+        )
+    )
+    paint = red if rep.hotspots else green
+    print(f"  hotspots: {paint(str(len(rep.hotspots)))}")
+    for h in rep.hotspots:
+        risk_paint = _RISK_COLOR.get(h.risk, dim)
+        print(
+            f"    [{risk_paint(str(h.complexity).rjust(3))}] "
+            f"{_kind(h.kind):<8} {bold(h.qualified_name)}  "
+            f"({_path(f'{h.rel_path}:{h.lineno}')}, {h.line_count} lines)"
+        )
+    return 0
+
+
+def _cmd_find_long_functions(args) -> int:
+    repo = Path(args.repo)
+    rep = find_long_functions(repo, threshold=args.threshold, limit=args.limit)
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_long_functions: {repo.resolve()}"))
+    print(
+        dim(
+            f"  callables={rep.total_callables} "
+            f"avg={rep.average} lines  "
+            f"over_threshold({args.threshold})={rep.over_threshold}"
+        )
+    )
+    paint = red if rep.functions else green
+    print(f"  long functions: {paint(str(len(rep.functions)))}")
+    for fn in rep.functions:
+        print(
+            f"    [{bold(str(fn.line_count).rjust(4))}L cx={fn.complexity:>3}] "
+            f"{_kind(fn.kind):<8} {bold(fn.qualified_name)}  "
+            f"({_path(f'{fn.rel_path}:{fn.lineno}')})"
+        )
+    return 0
+
+
+def _cmd_find_god_files(args) -> int:
+    repo = Path(args.repo)
+    rep = find_god_files(repo, limit=args.limit)
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_god_files: {repo.resolve()}"))
+    print(dim(f"  total files: {rep.total_files}"))
+    print(f"  god files: {bold(str(len(rep.files)))}")
+    for gf in rep.files:
+        score_paint = red if gf.score >= 0.5 else (yellow if gf.score >= 0.25 else dim)
+        print(
+            f"    [{score_paint(f'{gf.score:.3f}')}] "
+            f"sym={gf.symbol_count:>3} loc={gf.total_loc:>4} "
+            f"in={gf.fan_in:>3}  {_path(gf.rel_path)}"
+        )
+    return 0
+
+
+def _cmd_health_report(args) -> int:
+    repo = Path(args.repo)
+    rep = run_health_report(
+        repo,
+        complexity_threshold=args.complexity_threshold,
+        long_threshold=args.long_threshold,
+        top_n=args.top_n,
+    )
+    if args.json:
+        _print_json({"repo_path": rep.repo_path, "summary": rep.summary})
+        return 0
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rep.markdown, encoding="utf-8")
+        print(bold(f"health_report written to {_path(str(out_path))}"))
+        s = rep.summary
+        print(dim(
+            f"  files={s['headline']['files']} "
+            f"complexity_hotspots={s['complexity']['hotspot_count']} "
+            f"dead_code={s['dead_code_count']} "
+            f"unused_imports={s['unused_import_count']} "
+            f"cycles={s['cycle_count']}"
+        ))
+        return 0
+    print(rep.markdown)
+    return 0
+
+
 def _cmd_summary(args) -> int:
     repo = Path(args.repo)
     s = summarize(repo)
@@ -400,6 +519,22 @@ def _build_parser() -> argparse.ArgumentParser:
     pi = sub.add_parser("index", help="Index (or re-index) a repo")
     pi.add_argument("repo")
     pi.add_argument("--full", action="store_true", help="wipe and rebuild from scratch")
+    pi.add_argument(
+        "--parallel",
+        action="store_true",
+        help="force parallel parsing (default: auto for repos with >=50 files)",
+    )
+    pi.add_argument(
+        "--no-parallel",
+        action="store_true",
+        help="force sequential parsing",
+    )
+    pi.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="worker count for parallel mode (default: min(8, cpu-1))",
+    )
     pi.add_argument("--json", action="store_true")
     pi.set_defaults(func=_cmd_index)
 
@@ -455,6 +590,40 @@ def _build_parser() -> argparse.ArgumentParser:
     pcd.add_argument("--limit", type=int, default=20)
     pcd.add_argument("--json", action="store_true")
     pcd.set_defaults(func=_cmd_find_circular_deps)
+
+    pcx = sub.add_parser("find_complexity", help="List functions/methods with high cyclomatic complexity")
+    pcx.add_argument("repo")
+    pcx.add_argument("--threshold", type=int, default=10)
+    pcx.add_argument("--limit", type=int, default=30)
+    pcx.add_argument("--json", action="store_true")
+    pcx.set_defaults(func=_cmd_find_complexity)
+
+    plf = sub.add_parser("find_long_functions", help="List functions/methods over a line-count threshold")
+    plf.add_argument("repo")
+    plf.add_argument("--threshold", type=int, default=50)
+    plf.add_argument("--limit", type=int, default=30)
+    plf.add_argument("--json", action="store_true")
+    plf.set_defaults(func=_cmd_find_long_functions)
+
+    pgf = sub.add_parser("find_god_files", help="Rank files by symbols × LOC × fan-in")
+    pgf.add_argument("repo")
+    pgf.add_argument("--limit", type=int, default=20)
+    pgf.add_argument("--json", action="store_true")
+    pgf.set_defaults(func=_cmd_find_god_files)
+
+    phr = sub.add_parser("health_report", help="Generate a Markdown report combining every health signal")
+    phr.add_argument("repo")
+    phr.add_argument("--complexity-threshold", type=int, default=10)
+    phr.add_argument("--long-threshold", type=int, default=50)
+    phr.add_argument("--top-n", type=int, default=15)
+    phr.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="write the markdown to this path instead of stdout",
+    )
+    phr.add_argument("--json", action="store_true")
+    phr.set_defaults(func=_cmd_health_report)
 
     return p
 

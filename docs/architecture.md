@@ -15,12 +15,14 @@ src/jarvis_graph/
   __main__.py              # `python -m jarvis_graph`
   cli.py                   # argparse → engine functions, ANSI color helpers
   config.py                # .jarvis_graph/config.json
-  db.py                    # sqlite3 connection (FK on, WAL, NORMAL sync)
-  schema.py                # DDL + indexes (4 tables + meta)
+  db.py                    # sqlite3 connection (FK on, WAL, NORMAL sync) + migrations
+  schema.py                # DDL + indexes (4 tables + meta) — schema v2
   hashing.py               # 64 KiB chunked sha256
   models.py                # ParsedFile / ParsedSymbol / ParsedImport / ParsedCall
-  parser_python.py         # ast.parse → ParsedFile  (incl. local-type rewrite)
-  indexer.py               # walk → parse → diff → upsert → resolve
+  parser_python.py         # ast.parse → ParsedFile  (incl. local-type rewrite + cyclomatic)
+  indexer.py               # walk → parse → diff → upsert → resolve (parallel-aware)
+  parallel.py              # ProcessPoolExecutor wrapper for parse fan-out
+  gitignore.py             # GitignoreMatcher + GitignoreStack (stdlib regex)
   ranker.py                # score_symbol_name / score_qname / score_path / score_docstring
   query_engine.py          # locate (LIKE pool → ranker → AND/recency → top-N)
   context_engine.py        # explain (resolve → callers/callees/siblings/role_note)
@@ -30,6 +32,10 @@ src/jarvis_graph/
   dead_code_engine.py      # find_dead_code (kind+filter+textual call+global token scan)
   unused_imports_engine.py # find_unused_imports (token scan minus import lines)
   circular_deps_engine.py  # find_circular_deps (Tarjan SCC on resolved imports)
+  complexity_engine.py     # find_complexity (McCabe per callable, bucketed)
+  long_functions_engine.py # find_long_functions (line_count over threshold)
+  god_files_engine.py      # find_god_files (composite of symbols × LOC × fan-in)
+  health_report_engine.py  # health_report (Markdown aggregator over all engines)
   utils.py                 # iter_python_files, to_module_path, repo_data_dir, ...
   logging_utils.py         # one-line append-only operations log
 ```
@@ -57,7 +63,8 @@ file(file_id, rel_path UNIQUE, abs_path, module_path, sha256, size_bytes,
      mtime, indexed_at, parse_error)
 
 symbol(symbol_id, file_id → file CASCADE, name, qualified_name, kind,
-       parent_qname, lineno, end_lineno, col, docstring, signature, is_private)
+       parent_qname, lineno, end_lineno, col, docstring, signature, is_private,
+       complexity, line_count)        -- columns added in schema v2
 
 import_edge(edge_id, file_id → file CASCADE, imported_module, imported_name,
             alias, lineno, resolved_file_id → file SET NULL)
@@ -66,31 +73,37 @@ call_edge(edge_id, caller_symbol_id → symbol CASCADE, callee_name,
           resolved_symbol_id → symbol SET NULL, lineno)
 ```
 
-A few indexes on `file.module_path`, `symbol.name`, `symbol.qualified_name`, `import_edge.imported_module`, `call_edge.callee_name`, plus the obvious join columns (`call_edge.resolved_symbol_id`, `import_edge.resolved_file_id`). That's it. No FTS, no virtual tables — they were measured and didn't beat plain LIKE on this data size.
+A few indexes on `file.module_path`, `symbol.name`, `symbol.qualified_name`, `import_edge.imported_module`, `call_edge.callee_name`, plus the obvious join columns (`call_edge.resolved_symbol_id`, `import_edge.resolved_file_id`) and `symbol.complexity` for the v0.3 hotspot scan. That's it. No FTS, no virtual tables — they were measured and didn't beat plain LIKE on this data size.
+
+### Schema migrations
+
+`schema.py` carries a `SCHEMA_VERSION` constant. On every connection `db.connect` reads `meta.schema_version`; if it's lower than the current value, `_migrate(conn, current)` runs the forward-only steps in order (currently: v1→v2 adds `complexity` / `line_count` columns and the `symbol(complexity)` index). Fresh databases skip the version check but still run `_migrate(conn, 0)` so the post-DDL index always gets created. Migrations never drop columns and never modify data, only schema.
 
 `kind` includes a synthetic `"module"` row per file, with `qualified_name = module_path` and `name = "<module>"`. Without it, calls made at module scope (script bodies, `if __name__ == "__main__"` blocks) have nowhere to attach, and impact analysis silently undercounts.
 
 ## Indexing pipeline
 
-`indexer.index_repo(repo, full=False)`:
+`indexer.index_repo(repo, full=False, parallel=None, max_workers=None)`:
 
 1. Snapshot `(rel_path → (file_id, sha256))` from the existing index.
-2. Walk `*.py` files via `iter_python_files` (skips `.git`, `.venv`, `__pycache__`, `.jarvis_graph`, dotted dirs).
-3. For each file:
-   - sha256 (64 KiB chunks)
-   - if hash matches the existing row and `--full` is off → **skip**
-   - else parse with `parse_python_file`, delete the old file row (cascades children), insert the new one
-4. Files in the index but not on disk → delete.
-5. `_resolve_imports`:
+2. Walk `*.py` files via `iter_python_files` (skips `.git`, `.venv`, `__pycache__`, `.jarvis_graph`, dotted dirs, **plus anything matched by a layered `.gitignore`** — see *Walker* below).
+3. Decide whether to fan parsing out into a `ProcessPoolExecutor`:
+   - `parallel=True` forces it on, `parallel=False` forces it off
+   - `parallel=None` (default) → on iff `len(files) >= 50` (`should_parallelize`)
+4. Parallel pass (when enabled): `parallel.parse_in_parallel` submits one `_parse_worker` per file. Workers re-import `parser_python` and run `parse_python_file` in isolation, returning fully-populated `ParsedFile`s. `as_completed` streams results back to the main process where the SQLite writer applies them via `_ingest_parsed`. The pool initializer rebuilds the parent `sys.path` so editable installs and test runners that prepend `src/` keep working.
+5. Sequential safety net: any file the pool dropped silently (broken pool, pickling failure, …) is parsed sequentially right after — the writer is the same `_ingest_parsed` helper, so totals always reconcile.
+6. For each parsed file: if its sha256 matches the existing row and `--full` is off → **skip**; else delete the old file row (cascades children) and insert the new one.
+7. Files in the index but not on disk → delete.
+8. `_resolve_imports`:
    - exact match `module_path = imported_module`
    - suffix fallback `module_path LIKE '%.X'` **only** when exactly one candidate exists
-6. `_resolve_calls`:
+9. `_resolve_calls`:
    - same-file undotted (cheap, safe)
    - cross-module via resolved import edges (`from X import bar; bar()`)
    - dotted last-segment via imports (`mod.bar.baz()` → `baz` in some imported file)
    - **m1**: dotted `Cls.method` where `Cls` was imported via `import_edge` — bound to a method symbol with a matching `parent_qname` suffix in the imported file
    - **m2**: dotted `Cls.method` where `Cls` is defined in the caller's own file (covers the parser's `self.method` rewrite path)
-7. `config.save` + `logs/operations.log` append.
+10. `config.save` + `logs/operations.log` append.
 
 The parser also performs a small **local-type rewrite** before emitting calls, so this pattern resolves correctly:
 
@@ -152,6 +165,22 @@ The strip-imports step is critical: without it, every `from typing import Dict` 
 
 Build a directed graph from `import_edge.resolved_file_id`. Run iterative Tarjan's SCC. Report any SCC of size ≥ 2, plus single-node SCCs that have a self-loop. Sorted by size descending. The graph only contains *resolved* edges, so unresolved imports (stdlib, third-party) can't manufacture phantom cycles.
 
+### find_complexity
+
+Per-symbol McCabe cyclomatic is materialised at parse time (`parser_python._complexity`) and stored on `symbol.complexity`. The engine is therefore a single SQL select with a threshold filter and a `name NOT LIKE '\_\_%' ESCAPE '\\'` exclusion for dunder methods; no AST work happens at query time. Hotspots are bucketed `low (1-5)` / `medium (6-10)` / `high (11-20)` / `extreme (21+)` and sorted by complexity descending.
+
+### find_long_functions
+
+Same shape as `find_complexity` but sorts by `line_count`, also stored on the symbol row at parse time. Exclusions: dunders, `<module>` synthetic rows, anything below the threshold (default 50 lines).
+
+### find_god_files
+
+Composite score in a single SQL with a LEFT JOIN and a fan-in subquery counting resolved imports targeting each file. Columns: symbol count, max line offset (used as a LOC proxy), and resolved fan-in. Each component is min-max normalised across the candidate set, then averaged: `score = (sym_n/max_sym + loc/max_loc + fan_in/max_fan) / 3`. Files with zero symbols (empty `__init__.py`) are dropped before scoring.
+
+### health_report
+
+Calls every other engine in turn (complexity, long functions, god files, dead code, unused imports, circular deps), assembles their reports into a 7-section Markdown document, and computes a "summary" payload for JSON consumers (so other tools don't need to parse the Markdown). Top-N defaults to 15. Output goes to a file via `--out` or to stdout.
+
 ### detect_changes
 
 Walk the disk, hash each `*.py`, compare against `file.sha256`. Group into `added / modified / removed / unchanged`. Recommend `incremental` for small diffs, `full` if the diff is bigger than half the index, `no_changes` if everything matches.
@@ -159,6 +188,29 @@ Walk the disk, hash each `*.py`, compare against `file.sha256`. Group into `adde
 ### summary
 
 A flat heuristic snapshot — file/symbol counts by kind, top 15 most-imported files, top 15 largest files, likely entrypoints (`__main__.py`, `cli.py`, `manage.py`, …). Written to `summaries/repo_summary.json`.
+
+## Walker (gitignore-aware)
+
+`utils.iter_python_files(repo_path, respect_gitignore=True)` is the single source of truth for "what files are in this repo". It descends recursively (so layered `.gitignore`s can be pushed/popped naturally) and applies three filters in order:
+
+1. **Hardcoded `SKIP_DIRS`** — `.git`, `.venv`, `__pycache__`, `.jarvis_graph`, `node_modules`, `build`, `dist`, IDE caches, …
+2. **Dotted directories** — anything starting with `.` is dropped.
+3. **Layered gitignore** — every `.gitignore` encountered along the descent path contributes its rules to a `GitignoreStack`. Inner rules can re-include via `!pattern`. The stack is anchored per directory: a rule like `workspace/generated_projects/` in the root `.gitignore` resolves against root-relative paths, while a `*.tmp` in a subdirectory only affects that subdirectory's descendants.
+
+`gitignore.GitignoreMatcher` compiles each pattern into a Python `re.Pattern` covering the subset of git's wildmatch semantics that matters for Python repos: `*` (no `/`), `?`, `**` (cross-segment), `[abc]` character classes, anchored vs unanchored, `dir_only` (trailing `/`), and `!negation`. Unsupported patterns are silently dropped — the walker is best-effort, not a full git implementation.
+
+The motivating case: JARVIS has 200 auto-generated `*.py` files under `workspace/generated_projects/`, including a single 131k-line file that dominated the LOC ranking before the walker landed. Adding `workspace/generated_projects/` to the root `.gitignore` shrinks the visible tree from 610 → 407 files (-33%) and removes the noisiest entries from every health-check engine.
+
+## Parallel parsing
+
+`parallel.parse_in_parallel(files, max_workers=None)` is a thin wrapper around `concurrent.futures.ProcessPoolExecutor`. Each worker calls `parser_python.parse_python_file(Path(abs), Path(rel))` and returns the resulting `ParsedFile`. Choices:
+
+- **Worker count**: `min(8, os.cpu_count() - 1)` by default. Capped at 8 because beyond that the SQLite writer in the main process becomes the bottleneck and extra workers just steal CPU from it.
+- **Threshold**: `should_parallelize(file_count)` returns `True` only at ≥50 files. Below that, the spawn cost (~150 ms on Windows) eats the entire savings.
+- **Initializer**: workers re-import `jarvis_graph.parser_python` on first call, which means `sys.path` must contain the package. The pool initializer rebuilds the parent's `sys.path` so test runners that prepend `src/` (and editable installs that add the egg link) keep working without env-var fiddling.
+- **Failure mode**: per-file exceptions in workers are caught and dropped from the result stream — the main loop's "sequential safety net" pass picks them up afterwards. A completely broken pool (e.g. cannot spawn) returns no results, which the safety net also handles correctly.
+
+On JARVIS (407 files, 4.3k symbols, 29k calls): sequential = 5.04 s, parallel ×3 workers = 3.83 s — a ~24% wall-clock improvement. The gain scales with file count; for `tests/sample_repo` (5 files) parallel is *slower* due to spawn overhead, hence the 50-file threshold.
 
 ## What's deliberately not here
 

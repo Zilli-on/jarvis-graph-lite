@@ -38,6 +38,7 @@ def prepare_extended_repo() -> tuple[Path, Path]:
       - `dead_function.py`  — defines a function nothing calls
       - `unused_import.py`  — imports something it never uses
       - `cycle_a.py` / `cycle_b.py` — mutually-recursive imports
+      - `complex_module.py` — known cyclomatic + line counts for v0.3 engines
     """
     tmp_root, repo = prepare_sample_repo()
 
@@ -74,6 +75,62 @@ def prepare_extended_repo() -> tuple[Path, Path]:
         "\n"
         "def b_func() -> int:\n"
         "    return a_func() + 1\n",
+        encoding="utf-8",
+    )
+    # Complexity fixture: `tangled` has if/elif/for/and/or/try/except.
+    # Hand-counted McCabe: 1 (start) + if + elif + elif + for + and + and
+    #                    + or + try + except + while = 11
+    # `simple` has cyclomatic 1 (no branches).
+    (repo / "complex_module.py").write_text(
+        '"""Hand-built fixture with known cyclomatic complexity."""\n'
+        "\n"
+        "def simple(x):\n"
+        "    return x + 1\n"
+        "\n"
+        "def tangled(items, cond):\n"
+        "    total = 0\n"
+        "    if cond > 0:\n"
+        "        total += 1\n"
+        "    elif cond < 0:\n"
+        "        total -= 1\n"
+        "    elif cond == 0:\n"
+        "        total = 0\n"
+        "    for it in items:\n"
+        "        if it and it > 0 and it < 100:\n"
+        "            total += it\n"
+        "        elif it is None or it == -1:\n"
+        "            total -= 1\n"
+        "    counter = 0\n"
+        "    while counter < 5:\n"
+        "        counter += 1\n"
+        "    try:\n"
+        "        result = total / counter\n"
+        "    except ZeroDivisionError:\n"
+        "        result = 0\n"
+        "    return result\n"
+        "\n"
+        "def long_but_simple():\n"
+        "    a = 1\n"
+        "    b = 2\n"
+        "    c = 3\n"
+        "    d = 4\n"
+        "    e = 5\n"
+        "    f = 6\n"
+        "    g = 7\n"
+        "    h = 8\n"
+        "    i = 9\n"
+        "    j = 10\n"
+        "    k = 11\n"
+        "    l = 12\n"
+        "    m = 13\n"
+        "    n = 14\n"
+        "    o = 15\n"
+        "    p = 16\n"
+        "    q = 17\n"
+        "    r = 18\n"
+        "    s = 19\n"
+        "    t = 20\n"
+        "    return a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t\n",
         encoding="utf-8",
     )
     index_repo(repo, full=True)

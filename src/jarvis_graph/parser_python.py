@@ -41,6 +41,58 @@ def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return f"({', '.join(parts)})"
 
 
+# AST node types that contribute +1 to McCabe cyclomatic complexity. The
+# canonical formula is: edges - nodes + 2*P, but for structured code that
+# reduces to "1 + count(decision points)". A decision point is anything that
+# adds a branch in the control-flow graph.
+_BRANCH_NODES: tuple[type, ...] = (
+    ast.If,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.Try,
+    ast.ExceptHandler,
+    ast.With,
+    ast.AsyncWith,
+    ast.IfExp,        # ternary `a if cond else b`
+    ast.Assert,
+    ast.comprehension,  # each `for ... in ...` clause inside a comprehension
+)
+
+
+def _complexity(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
+    """McCabe cyclomatic complexity for a function/method.
+
+    Counts: 1 + (each if/for/while/try/except/with/and/or/ternary/assert
+    + each `if` clause inside a comprehension + each `case` in a match).
+    Booleans `and`/`or` add (n_values - 1) per chain, matching radon's
+    behaviour. We do NOT count `else` (it's the negative branch of the
+    same `if` and adds no edge).
+    """
+    score = 1
+    for sub in ast.walk(node):
+        if isinstance(sub, _BRANCH_NODES):
+            score += 1
+        elif isinstance(sub, ast.BoolOp):
+            # `a and b and c` adds 2 branches, not 3.
+            score += max(0, len(sub.values) - 1)
+        elif isinstance(sub, ast.comprehension):
+            # Each `if` clause inside a comprehension adds a branch.
+            score += len(sub.ifs)
+        elif hasattr(ast, "Match") and isinstance(sub, ast.Match):
+            # match/case (PEP 634) — each case is a branch.
+            score += len(sub.cases)
+    return score
+
+
+def _line_count(node: ast.AST) -> int:
+    end = getattr(node, "end_lineno", None)
+    start = getattr(node, "lineno", None)
+    if end is None or start is None:
+        return 0
+    return max(0, int(end) - int(start) + 1)
+
+
 def _callee_name(node: ast.AST) -> str | None:
     """Render a Call.func into its textual reference, e.g. 'foo' or 'mod.bar.baz'."""
     if isinstance(node, ast.Name):
@@ -231,6 +283,8 @@ def parse_python_file(abs_path: Path, rel_path: Path) -> ParsedFile:
                     signature=_signature(node),
                     is_private=1 if node.name.startswith("_") else 0,
                     parent_qname=None,
+                    complexity=_complexity(node),
+                    line_count=_line_count(node),
                 )
             )
             pf.calls.extend(_walk_calls(node.body, qname))
@@ -248,6 +302,8 @@ def parse_python_file(abs_path: Path, rel_path: Path) -> ParsedFile:
                     signature=None,
                     is_private=1 if node.name.startswith("_") else 0,
                     parent_qname=None,
+                    complexity=0,
+                    line_count=_line_count(node),
                 )
             )
             for cn in node.body:
@@ -265,6 +321,8 @@ def parse_python_file(abs_path: Path, rel_path: Path) -> ParsedFile:
                             signature=_signature(cn),
                             is_private=1 if cn.name.startswith("_") else 0,
                             parent_qname=cls_qname,
+                            complexity=_complexity(cn),
+                            line_count=_line_count(cn),
                         )
                     )
                     pf.calls.extend(

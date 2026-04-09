@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Iterator
+
+from jarvis_graph.gitignore import GitignoreStack
 
 # Directories we never descend into when indexing.
 SKIP_DIRS = frozenset(
@@ -52,24 +55,56 @@ def to_module_path(rel_path: Path) -> str:
     return ".".join(parts)
 
 
-def iter_python_files(repo_path: Path):
-    """Yield (abs_path, rel_path) for every .py file under `repo_path`,
-    skipping noise directories. Iterative + low-memory."""
+def iter_python_files(
+    repo_path: Path,
+    respect_gitignore: bool = True,
+) -> Iterator[tuple[Path, Path]]:
+    """Yield ``(abs_path, rel_path)`` for every `.py` file under ``repo_path``.
+
+    Skips:
+      * hardcoded noise dirs (`SKIP_DIRS`)
+      * dotted directories (`.git`, `.cache`, …)
+      * paths matched by any active `.gitignore` (when ``respect_gitignore``)
+
+    The walker is recursive so a `GitignoreStack` can layer rules naturally
+    when entering / leaving subdirectories.
+    """
     repo_path = repo_path.resolve()
-    stack = [repo_path]
-    while stack:
-        d = stack.pop()
+    stack = GitignoreStack()
+
+    def _walk(d: Path) -> Iterator[tuple[Path, Path]]:
+        added = False
+        if respect_gitignore:
+            gi = d / ".gitignore"
+            if gi.is_file():
+                added = stack.push(d, gi)
         try:
-            for entry in d.iterdir():
-                name = entry.name
-                if entry.is_dir():
-                    if name in SKIP_DIRS or name.startswith("."):
-                        # Allow . prefixed dirs only if not in SKIP_DIRS — but to keep
-                        # the index lean, drop all dotted dirs.
-                        if name not in (".",):
-                            continue
-                    stack.append(entry)
-                elif entry.is_file() and name.endswith(".py"):
-                    yield entry, entry.relative_to(repo_path)
+            entries = list(d.iterdir())
         except (PermissionError, OSError):
-            continue
+            if added:
+                stack.pop()
+            return
+        # Stable order: dirs after files matters less than determinism.
+        entries.sort(key=lambda p: p.name)
+        for entry in entries:
+            name = entry.name
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                if name in SKIP_DIRS or name.startswith("."):
+                    continue
+                if respect_gitignore and stack.is_ignored(entry, True):
+                    continue
+                yield from _walk(entry)
+            else:
+                if not name.endswith(".py"):
+                    continue
+                if respect_gitignore and stack.is_ignored(entry, False):
+                    continue
+                yield entry, entry.relative_to(repo_path)
+        if added:
+            stack.pop()
+
+    yield from _walk(repo_path)

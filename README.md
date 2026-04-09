@@ -4,7 +4,7 @@ A tiny **local** code-intelligence index for Python repos.
 Stdlib only. No embeddings. No daemons. No external services.
 Runs on Win10, Python 3.11, in seconds, on a 9-year-old i5 with 8 GB RAM.
 
-It answers seven questions about a repo:
+It answers eleven questions about a repo:
 
 1. **`query`** — *where does this concept live?*  (with `--and` for strict AND across tokens, plus a recency boost)
 2. **`context`** — *what is this symbol or file's role?*
@@ -13,6 +13,10 @@ It answers seven questions about a repo:
 5. **`find_dead_code`** — *which functions/classes/methods are never referenced anywhere?*
 6. **`find_unused_imports`** — *which imports are never used in their file?*
 7. **`find_circular_deps`** — *are there import cycles in the repo?*
+8. **`find_complexity`** — *which functions are too tangled?* (McCabe cyclomatic, low → extreme buckets)
+9. **`find_long_functions`** — *which functions are over the line-count threshold?*
+10. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
+11. **`health_report`** — *one Markdown file aggregating all of the above.*
 
 Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
 
@@ -61,6 +65,14 @@ python -m jarvis_graph summary  C:\JARVIS
 python -m jarvis_graph find_dead_code      C:\JARVIS --limit 20
 python -m jarvis_graph find_unused_imports C:\JARVIS --limit 20
 python -m jarvis_graph find_circular_deps  C:\JARVIS
+
+:: 4. find complexity / size hotspots
+python -m jarvis_graph find_complexity     C:\JARVIS --threshold 10
+python -m jarvis_graph find_long_functions C:\JARVIS --threshold 50
+python -m jarvis_graph find_god_files      C:\JARVIS --limit 15
+
+:: 5. one report to rule them all
+python -m jarvis_graph health_report       C:\JARVIS --out HEALTH.md
 ```
 
 Every command accepts `--json` for machine-readable output.
@@ -116,7 +128,7 @@ These heuristics are wrong sometimes — see `deferred-features.md` for what's d
 ```
 jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
 
-  index               <repo> [--full] [--json]
+  index               <repo> [--full] [--parallel|--no-parallel] [--workers N] [--json]
   query               <repo> "<question>" [--limit N] [--and] [--json]
   context             <repo> <symbol-or-file>          [--json]
   impact              <repo> <symbol-or-file>          [--json]
@@ -125,6 +137,10 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   find_dead_code      <repo> [--limit N]               [--json]
   find_unused_imports <repo> [--limit N]               [--json]
   find_circular_deps  <repo>                           [--json]
+  find_complexity     <repo> [--threshold N] [--limit N] [--json]
+  find_long_functions <repo> [--threshold N] [--limit N] [--json]
+  find_god_files      <repo> [--limit N]               [--json]
+  health_report       <repo> [--out FILE] [--top-n N]  [--json]
 ```
 
 `<symbol-or-file>` resolves in this order: exact qualified name → qualified-name suffix (for dotted `Class.method`) → parent-qname suffix (for `Class.method` where `Class` is in another module) → exact symbol name → file path substring.
@@ -135,12 +151,15 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
 
 Tested on Windows 10, i5-6600K, 8 GB DDR4, no SSD heroics:
 
-| Repo            | Files | Symbols | Calls   | Full reindex |
-|-----------------|------:|--------:|--------:|-------------:|
-| `tests/sample`  |     5 |      18 |      14 |       <0.1 s |
-| `C:\JARVIS\`    |   598 |   ~4.6k |  ~29k   |        ~3 s  |
+| Repo                       | Files | Symbols | Calls  | Full reindex |
+|----------------------------|------:|--------:|-------:|-------------:|
+| `tests/sample`             |     5 |      18 |     14 |       <0.1 s |
+| `C:\JARVIS\` (sequential)  |   407 |   ~4.3k |   ~29k |        5.0 s |
+| `C:\JARVIS\` (parallel ×3) |   407 |   ~4.3k |   ~29k |        3.8 s |
 
-Incremental reindex on the same JARVIS repo with no changes: <1 s (sha256 short-circuit). `find_dead_code` on JARVIS: ~2 s (per-file token scan is the dominant cost). `find_circular_deps`: <0.5 s (Tarjan's SCC on the import graph).
+Incremental reindex on the same JARVIS repo with no changes: <1 s (sha256 short-circuit). `find_dead_code` on JARVIS: ~2 s (per-file token scan is the dominant cost). `find_circular_deps`: <0.5 s (Tarjan's SCC on the import graph). `health_report`: ~6 s end-to-end (runs all six engines).
+
+The walker honours `.gitignore` files at the repo root and any subdirectory, so generated junk (e.g. `workspace/generated_projects/`) doesn't pollute the index. Disable the layered matchers by passing `respect_gitignore=False` from a script — the CLI always honours them.
 
 ---
 

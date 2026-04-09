@@ -11,6 +11,19 @@ Things that were considered and **explicitly left out**, with the trigger that w
 - **Strict AND query mode + recency boost** (`query --and`). Implemented because lexical recall on multi-word questions was too noisy.
 - **ANSI color output**. Implemented because the CLI's primary consumer is now humans skimming impact/dead-code reports.
 
+## Promoted out of this file in v0.3
+
+- **Per-callable cyclomatic complexity** (`find_complexity`). Materialised on the symbol row at parse time so the engine is a single SQL select. Bucketed `low/medium/high/extreme`. Surfaced `lyrc-local/amv_engine.render_amv` (cyclomatic 184) on JARVIS.
+- **Long-function detection** (`find_long_functions`). Same shape — `line_count` is a parse-time column. Default threshold 50 lines.
+- **God-file scoring** (`find_god_files`). Composite normalised score over symbol count × LOC × resolved fan-in. Top entry on JARVIS: `agents/agent_tools.py` (40 fan-in, 37 symbols).
+- **Aggregated health report** (`health_report`). One Markdown file with seven sections covering every health-check engine plus a headline summary. Ships with a structured `summary` payload for JSON consumers.
+- **Forward-only schema migrations** (`db._migrate`). Schema bumped to v2 to add `complexity` / `line_count` columns; old v1 databases migrate cleanly without a wipe.
+
+## Promoted out of this file in v0.4
+
+- **Gitignore-aware walker** (`utils.iter_python_files` + `gitignore.GitignoreStack`). Recursive descent with layered matchers; supports `**`, anchored vs unanchored, dir-only, negation, character classes. Cut JARVIS from 610 → 407 visible files by excluding `workspace/generated_projects/`.
+- **Parallel parsing** (`parallel.parse_in_parallel`). `ProcessPoolExecutor` fan-out with a `min(8, cpu-1)` worker cap, a 50-file activation threshold, and a sequential safety net for any worker drops. Cut JARVIS full reindex from 5.04 s → 3.83 s (~24%).
+
 ## Still deferred
 
 | Feature | Why deferred | Trigger to add |

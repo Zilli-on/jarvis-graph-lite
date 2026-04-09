@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 class ParsedSymbol:
     name: str
     qualified_name: str
-    kind: str  # 'function' | 'class' | 'method' | 'constant'
+    kind: str  # 'function' | 'class' | 'method' | 'constant' | 'module'
     lineno: int
     end_lineno: int | None
     col: int
@@ -20,6 +20,8 @@ class ParsedSymbol:
     signature: str | None
     is_private: int  # 0/1
     parent_qname: str | None  # for methods, the parent class qname
+    complexity: int = 0  # McCabe cyclomatic; 0 for non-callables
+    line_count: int = 0  # end_lineno - lineno + 1; 0 if unknown
 
 
 @dataclass

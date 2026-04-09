@@ -2,11 +2,15 @@
 
 Four tables, deliberately. No JSON columns, no triggers, no views. Indexes
 exist only where the four CLI commands actually probe.
+
+Schema versions:
+  1 — initial v0.1
+  2 — v0.3: added `symbol.complexity` and `symbol.line_count`
 """
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DDL = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -40,12 +44,16 @@ CREATE TABLE IF NOT EXISTS symbol (
     col            INTEGER,
     docstring      TEXT,
     signature      TEXT,
-    is_private     INTEGER NOT NULL DEFAULT 0
+    is_private     INTEGER NOT NULL DEFAULT 0,
+    complexity     INTEGER NOT NULL DEFAULT 0,
+    line_count     INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_symbol_name  ON symbol(name);
-CREATE INDEX IF NOT EXISTS idx_symbol_qname ON symbol(qualified_name);
-CREATE INDEX IF NOT EXISTS idx_symbol_file  ON symbol(file_id);
-CREATE INDEX IF NOT EXISTS idx_symbol_kind  ON symbol(kind);
+CREATE INDEX IF NOT EXISTS idx_symbol_name       ON symbol(name);
+CREATE INDEX IF NOT EXISTS idx_symbol_qname      ON symbol(qualified_name);
+CREATE INDEX IF NOT EXISTS idx_symbol_file       ON symbol(file_id);
+CREATE INDEX IF NOT EXISTS idx_symbol_kind       ON symbol(kind);
+-- idx_symbol_complexity is created post-migration in db._migrate, so older
+-- DBs that haven't been upgraded yet don't fail to open here.
 
 CREATE TABLE IF NOT EXISTS import_edge (
     edge_id          INTEGER PRIMARY KEY AUTOINCREMENT,
