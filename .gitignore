@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+.coverage
+*.egg-info/
+build/
+dist/
+
+# Repo-local index data — never committed back to a target repo
+.jarvis_graph/

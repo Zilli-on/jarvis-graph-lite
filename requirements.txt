@@ -1,0 +1,4 @@
+# jarvis-graph-lite v1 — pure stdlib, zero runtime dependencies.
+# Listed for completeness; nothing to install.
+#
+# Test runner is also stdlib (unittest), so no dev dependencies either.
