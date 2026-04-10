@@ -32,6 +32,7 @@ from jarvis_graph.indexer import index_repo  # noqa: E402
 from jarvis_graph.test_skeleton_engine import (  # noqa: E402
     SkeletonError,
     _params_for_signature,
+    _to_pascal_case,
     generate_test_skeleton,
     write_skeleton,
 )
@@ -50,6 +51,9 @@ def _make_skeleton_repo() -> tuple[Path, Path]:
         "\n"
         "def lonely() -> None:\n"
         "    pass\n"
+        "\n"
+        "def gather_system_context(target: str) -> dict:\n"
+        "    return {'target': target}\n"
         "\n"
         "class Greeter:\n"
         "    def __init__(self, name: str, prefix: str = 'Hello') -> None:\n"
@@ -71,6 +75,29 @@ def _make_skeleton_repo() -> tuple[Path, Path]:
     )
     index_repo(repo, full=True)
     return tmp_root, repo
+
+
+class PascalCaseTests(unittest.TestCase):
+    def test_snake_case_word_becomes_pascal(self) -> None:
+        self.assertEqual(_to_pascal_case("gather_system_context"), "GatherSystemContext")
+
+    def test_single_word_lowercase_becomes_capitalized(self) -> None:
+        self.assertEqual(_to_pascal_case("summarize"), "Summarize")
+
+    def test_already_pascal_case_is_idempotent(self) -> None:
+        self.assertEqual(_to_pascal_case("Greeter"), "Greeter")
+        self.assertEqual(_to_pascal_case("DriftReport"), "DriftReport")
+
+    def test_leading_underscore_segments_skipped(self) -> None:
+        # `__internal` would otherwise produce empty leading parts
+        self.assertEqual(_to_pascal_case("__internal_helper"), "InternalHelper")
+
+    def test_acronym_preserved(self) -> None:
+        # We deliberately do NOT lowercase the rest of each segment, so
+        # `IOError` survives intact and `parse_HTML_doc` becomes
+        # `ParseHTMLDoc` rather than `ParseHtmlDoc`.
+        self.assertEqual(_to_pascal_case("IOError"), "IOError")
+        self.assertEqual(_to_pascal_case("parse_HTML_doc"), "ParseHTMLDoc")
 
 
 class ParseSignatureTests(unittest.TestCase):
@@ -163,6 +190,14 @@ class FunctionSkeletonTests(unittest.TestCase):
             ast.parse(skel.body)
         except SyntaxError as e:  # pragma: no cover — failing test surfaces it
             self.fail(f"generated skeleton failed to parse: {e}\n---\n{skel.body}")
+
+    def test_snake_case_function_yields_pascal_case_test_class(self) -> None:
+        # Regression for v0.10.1: gather_system_context used to render
+        # `Gather_system_contextTests` (single-letter cap), now produces
+        # the correct PascalCase form.
+        skel = generate_test_skeleton(self.repo, "gather_system_context")
+        self.assertIn("class GatherSystemContextTests(unittest.TestCase):", skel.body)
+        self.assertNotIn("Gather_system_context", skel.body)
 
 
 class ClassSkeletonTests(unittest.TestCase):

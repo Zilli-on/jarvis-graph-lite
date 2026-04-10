@@ -110,6 +110,17 @@ def _params_for_signature(signature: str | None, drop_self: bool) -> list[str]:
     return cleaned
 
 
+def _to_pascal_case(name: str) -> str:
+    """Convert snake_case (or already-PascalCase) to PascalCase for the
+    test class name. `gather_system_context` → `GatherSystemContext`,
+    `Greeter` → `Greeter` (idempotent), `IOError` → `IOError`. Empty
+    segments from `__leading_underscore` are skipped."""
+    parts = [p for p in name.split("_") if p]
+    if not parts:
+        return name
+    return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
 def _function_test_method(name: str, params: list[str]) -> str:
     """Render one `test_<name>` method body for a free function or method."""
     if params:
@@ -147,7 +158,7 @@ def _render_function_skeleton(
     target_name: str,
     params: list[str],
 ) -> str:
-    test_class = f"{target_name[0].upper()}{target_name[1:]}Tests"
+    test_class = f"{_to_pascal_case(target_name)}Tests"
     return (
         f'"""Generated test skeleton for `{target_module}.{target_name}`.\n'
         f'\n'
@@ -177,7 +188,7 @@ def _render_class_skeleton(
     init_params: list[str],
     public_methods: list[tuple[str, list[str]]],
 ) -> str:
-    test_class = f"{target_name}Tests"
+    test_class = f"{_to_pascal_case(target_name)}Tests"
     body_parts: list[str] = [_class_setup_body(target_name, init_params)]
     if not public_methods:
         body_parts.append(
