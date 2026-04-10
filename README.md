@@ -4,7 +4,7 @@ A tiny **local** code-intelligence index for Python repos.
 Stdlib only. No embeddings. No daemons. No external services.
 Runs on Win10, Python 3.11, in seconds, on a 9-year-old i5 with 8 GB RAM.
 
-It answers thirteen questions about a repo:
+It answers fourteen questions about a repo:
 
 1. **`query`** — *where does this concept live?*  (with `--and` for strict AND across tokens, plus a recency boost)
 2. **`context`** — *what is this symbol or file's role?*
@@ -12,13 +12,14 @@ It answers thirteen questions about a repo:
 4. **`find_path`** — *how does my code get from A to B?*  (BFS shortest call chain across resolved call edges — answers the question that `impact` leaves open: not "what does X reach" but "how do I reach Y from here")
 5. **`detect_changes`** — *what's drifted since I last indexed?*
 6. **`find_dead_code`** — *which functions/classes/methods are never referenced anywhere?*
-7. **`find_unused_imports`** — *which imports are never used in their file?*
-8. **`find_circular_deps`** — *are there import cycles in the repo?*
-9. **`find_complexity`** — *which functions are too tangled?* (McCabe cyclomatic, low → extreme buckets)
-10. **`find_long_functions`** — *which functions are over the line-count threshold?*
-11. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
-12. **`find_high_fan_out`** — *which files import too much of the rest of the repo?* (the symmetric counterpart to `find_god_files` — high fan-out flags client hubs that break first when their many dependencies move)
-13. **`health_report`** — *one Markdown file aggregating all of the above. With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section.*
+7. **`find_coverage_gaps`** — *which public symbols are never reached from a test?*  (multi-source forward BFS from every test entry point — flags the high-complexity untested code first)
+8. **`find_unused_imports`** — *which imports are never used in their file?*
+9. **`find_circular_deps`** — *are there import cycles in the repo?*
+10. **`find_complexity`** — *which functions are too tangled?* (McCabe cyclomatic, low → extreme buckets)
+11. **`find_long_functions`** — *which functions are over the line-count threshold?*
+12. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
+13. **`find_high_fan_out`** — *which files import too much of the rest of the repo?* (the symmetric counterpart to `find_god_files` — high fan-out flags client hubs that break first when their many dependencies move)
+14. **`health_report`** — *one Markdown file aggregating all of the above. With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section.*
 
 Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
 
@@ -65,9 +66,10 @@ python -m jarvis_graph detect_changes C:\JARVIS
 python -m jarvis_graph summary  C:\JARVIS
 
 :: 3. find rot
-python -m jarvis_graph find_dead_code      C:\JARVIS --limit 20
-python -m jarvis_graph find_unused_imports C:\JARVIS --limit 20
-python -m jarvis_graph find_circular_deps  C:\JARVIS
+python -m jarvis_graph find_dead_code       C:\JARVIS --limit 20
+python -m jarvis_graph find_coverage_gaps   C:\JARVIS --min-complexity 10
+python -m jarvis_graph find_unused_imports  C:\JARVIS --limit 20
+python -m jarvis_graph find_circular_deps   C:\JARVIS
 
 :: 4. find complexity / size / coupling hotspots
 python -m jarvis_graph find_complexity     C:\JARVIS --threshold 10
@@ -145,6 +147,7 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   detect_changes      <repo>                           [--json]
   summary             <repo>                           [--json]
   find_dead_code      <repo> [--limit N]               [--json]
+  find_coverage_gaps  <repo> [--min-complexity N] [--limit N] [--json]
   find_unused_imports <repo> [--limit N]               [--json]
   find_circular_deps  <repo>                           [--json]
   find_complexity     <repo> [--threshold N] [--limit N] [--json]

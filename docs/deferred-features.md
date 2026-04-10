@@ -36,6 +36,10 @@ Things that were considered and **explicitly left out**, with the trigger that w
 
 - **Shortest call-chain finder** (`find_path`). `impact` shows the blast radius if you change a symbol; the gap it left is "how does my code *get to* this expensive helper?". `find_path` is a forward BFS over `call_edge.resolved_symbol_id` with parent-map path reconstruction, bounded by `max_depth` (default 8). Reuses `_resolve_target` from `context_engine` so dotted names, bare names, and `Class.method` all work as endpoints. Validation on JARVIS: `jarvis_brain.main → execute_tool` resolves to a 4-step cross-module chain (`main → mode_auto → _execute_task → AutonomousAgent.run → execute_tool`) in ~44 nodes explored. Catches the bare-name pitfall in `_resolve_target`: when a file `entry.py` defines `def entry()`, the `<module>` synthetic row's `qualified_name` collides with the function — fixed with a fall-through that prefers a callable over a module-kind hit when both share the bare name.
 
+## Promoted out of this file in v0.8
+
+- **Test-coverage gaps** (`find_coverage_gaps`). Static reachability analysis — *not* runtime coverage. Multi-source forward BFS over `call_edge.resolved_symbol_id` with a single shared visited set, seeded from every test entry point (functions named `test_*` in test files, plus `setUp`/`tearDown` on `Test*` classes). Anything in the public-symbol pool that the BFS never visited is a coverage gap. Sorted by complexity desc → line_count desc so the most *risky* untested code surfaces first. `--min-complexity` lets you focus on the high-cyclomatic bucket. Validation on JARVIS today: 3.4% coverage (well-known) — top gap is `lyrc-local/amv_engine.render_amv` at cyclomatic 184, exactly the function we already wanted to test. Catches dynamic-dispatch blind spots like `StatusHandler.do_GET` (cmplx 91, callers=0 because `BaseHTTPRequestHandler` dispatches via reflection) — surfaced because static reachability is honest about what it can and can't see.
+
 ## Still deferred
 
 | Feature | Why deferred | Trigger to add |

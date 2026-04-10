@@ -31,6 +31,7 @@ src/jarvis_graph/
   change_detector.py       # disk vs db diff (added / modified / removed)
   repo_summary.py          # deterministic snapshot
   dead_code_engine.py      # find_dead_code (kind+filter+textual call+global token scan)
+  coverage_gap_engine.py   # find_coverage_gaps (multi-source forward BFS from test entries)
   unused_imports_engine.py # find_unused_imports (token scan minus import lines)
   circular_deps_engine.py  # find_circular_deps (Tarjan SCC on resolved imports)
   complexity_engine.py     # find_complexity (McCabe per callable, bucketed)
@@ -170,6 +171,21 @@ A symbol is flagged as dead only if all of these hold:
 The final cross-file token check is the expensive one — it builds `dict[file_id, set[token]]` lazily, only after the cheap filters reduce the candidate set, then checks for the name in any file other than the symbol's defining file. This catches dispatch-dict registrations like `tools["bash_exec"] = bash_exec` that pure call-graph analysis can't see, eliminating ~140 false positives on JARVIS.
 
 False positives are the cardinal sin here; false negatives are tolerated.
+
+### find_coverage_gaps
+
+Test coverage gaps via static reachability — *not* runtime coverage. Two phases:
+
+1. **Find test entry points.** Any function/method in a file matching `test_*.py`, `*_test.py`, or `tests/...` whose name starts with `test_`. Methods on a class whose name starts with `Test` are also included (so `setUp`/`tearDown` pull fixtures into the reachable set).
+2. **Multi-source forward BFS.** A single shared `visited` set is seeded with every test entry point's symbol id. The BFS pops one node at a time, queries `call_edge.resolved_symbol_id` for that caller, and adds every unvisited callee to the queue. No depth cap — we want the full transitive closure of "reachable from any test". Each symbol is expanded at most once because the visited set is shared, so the cost is `O(V + E)` over the resolved subgraph regardless of how many test entries there are.
+
+The "coverage gap" pool is every public symbol (`function`, `method`, `class`; not private; not dunder; not in a test file) that the BFS never visited. Sorted by cyclomatic complexity descending, then `line_count` descending — the most *risky* untested code first, which is what you actually want to fix. Each gap carries a `caller_count` (distinct resolved callers across the whole repo) so you can spot symbols that are widely used in production but never touched by tests.
+
+`min_complexity` lets you focus the report on actually-risky code: `--min-complexity 10` only flags functions in the high/extreme cyclomatic buckets, which is usually the right starting point on a real repo. The default of 1 returns everything.
+
+Limitations are the same family as `find_dead_code`: dynamic dispatch through `getattr` or a registry dict is invisible. A test that drives `dispatcher["fn"]()` doesn't mark `fn` as reached. We don't compensate via textual scanning here because the question is "did a test *call* this code" — a string mention isn't the same.
+
+The "no test entry points" case returns an empty result with a friendly note explaining the search patterns, instead of silently flagging every public symbol as a gap.
 
 ### find_unused_imports
 

@@ -1,6 +1,6 @@
 """jarvis-graph CLI: index / query / context / impact / find_path / detect_changes
 plus the v0.2 + v0.3 health-check engines, v0.5 baseline drift, v0.6 fan-out,
-and v0.7 call-chain finder.
+v0.7 call-chain finder, and v0.8 test-coverage gaps.
 
 Usage:
     jarvis-graph index <repo>            # incremental
@@ -12,6 +12,7 @@ Usage:
     jarvis-graph detect_changes <repo>
     jarvis-graph summary <repo>
     jarvis-graph find_dead_code       <repo>
+    jarvis-graph find_coverage_gaps   <repo> [--min-complexity N] [--limit N]
     jarvis-graph find_unused_imports  <repo>
     jarvis-graph find_circular_deps   <repo>
     jarvis-graph find_complexity      <repo> [--threshold N] [--limit N]
@@ -109,6 +110,7 @@ from jarvis_graph.change_detector import detect_changes
 from jarvis_graph.circular_deps_engine import find_circular_deps
 from jarvis_graph.complexity_engine import find_complexity
 from jarvis_graph.context_engine import context as run_context
+from jarvis_graph.coverage_gap_engine import find_coverage_gaps
 from jarvis_graph.dead_code_engine import find_dead_code
 from jarvis_graph.fan_out_engine import find_high_fan_out
 from jarvis_graph.find_path_engine import find_path as run_find_path
@@ -356,6 +358,40 @@ def _cmd_find_dead_code(args) -> int:
         )
     if len(rep.dead) > args.limit:
         print(dim(f"    ... +{len(rep.dead) - args.limit} more"))
+    return 0
+
+
+def _cmd_find_coverage_gaps(args) -> int:
+    repo = Path(args.repo)
+    rep = find_coverage_gaps(
+        repo,
+        limit=args.limit,
+        min_complexity=args.min_complexity,
+    )
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_coverage_gaps: {repo.resolve()}"))
+    if rep.test_entry_points == 0:
+        print(red(f"  {rep.note}"))
+        return 1
+    print(
+        dim(
+            f"  test entry points: {rep.test_entry_points}  "
+            f"reached symbols: {rep.reached_count}  "
+            f"public pool: {rep.total_public_symbols}"
+        )
+    )
+    paint = green if rep.coverage_pct >= 80 else (yellow if rep.coverage_pct >= 50 else red)
+    print(f"  coverage: {paint(f'{rep.coverage_pct}%')}")
+    paint = red if rep.gaps else green
+    print(f"  gaps shown: {paint(str(len(rep.gaps)))} (min_complexity={args.min_complexity})")
+    for g in rep.gaps:
+        print(
+            f"    - {_kind(g.kind):<8} {bold(g.qualified_name)}  "
+            f"cmplx={g.complexity} loc={g.line_count} callers={g.caller_count}  "
+            f"({_path(f'{g.rel_path}:{g.lineno}')})"
+        )
     return 0
 
 
@@ -699,6 +735,26 @@ def _build_parser() -> argparse.ArgumentParser:
     pdc.add_argument("--limit", type=int, default=50)
     pdc.add_argument("--json", action="store_true")
     pdc.set_defaults(func=_cmd_find_dead_code)
+
+    pcg = sub.add_parser(
+        "find_coverage_gaps",
+        help="List public symbols that no test entry point can reach via the call graph",
+    )
+    pcg.add_argument("repo")
+    pcg.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="cap on returned gaps after sorting (default 50)",
+    )
+    pcg.add_argument(
+        "--min-complexity",
+        type=int,
+        default=1,
+        help="only flag symbols with cyclomatic complexity at least this (default 1, raise to 5+ to focus)",
+    )
+    pcg.add_argument("--json", action="store_true")
+    pcg.set_defaults(func=_cmd_find_coverage_gaps)
 
     pui = sub.add_parser("find_unused_imports", help="List unused import statements")
     pui.add_argument("repo")
