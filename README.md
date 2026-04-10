@@ -75,7 +75,7 @@ python -m jarvis_graph find_god_files      C:\JARVIS --limit 15
 python -m jarvis_graph health_report       C:\JARVIS --out HEALTH.md
 
 :: 6. take a snapshot today, diff it tomorrow
-python -m jarvis_graph health_report C:\JARVIS --json > snap.json
+python -m jarvis_graph health_report C:\JARVIS --save-baseline snap.json --out HEALTH.md
 :: ... time passes, code changes ...
 python -m jarvis_graph health_report C:\JARVIS --baseline snap.json --out HEALTH.md
 ```
@@ -145,7 +145,7 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   find_complexity     <repo> [--threshold N] [--limit N] [--json]
   find_long_functions <repo> [--threshold N] [--limit N] [--json]
   find_god_files      <repo> [--limit N]               [--json]
-  health_report       <repo> [--out FILE] [--top-n N] [--baseline FILE]  [--json]
+  health_report       <repo> [--out FILE] [--top-n N] [--baseline FILE] [--save-baseline FILE]  [--json]
 ```
 
 `<symbol-or-file>` resolves in this order: exact qualified name → qualified-name suffix (for dotted `Class.method`) → parent-qname suffix (for `Class.method` where `Class` is in another module) → exact symbol name → file path substring.

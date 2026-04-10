@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import io
+import json
+import sys
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 
 from conftest import cleanup, prepare_extended_repo
 
+from jarvis_graph import cli
 from jarvis_graph.health_report_engine import health_report
 
 
@@ -68,6 +73,60 @@ class HealthReportTests(unittest.TestCase):
         self.assertIn("## 8. Drift since baseline", rep2.markdown)
         self.assertIn("drift", rep2.summary)
         self.assertEqual(rep2.summary["drift"]["regression_count"], 0)
+
+    def test_cli_save_baseline_then_baseline_diff(self) -> None:
+        # End-to-end CLI run: snapshot, then re-run with that snapshot as
+        # baseline. The drift section must appear in the produced markdown
+        # and report zero regressions.
+        snap = self.tmp_root / "snap.json"
+        out_md = self.tmp_root / "report.md"
+        out_md2 = self.tmp_root / "report2.md"
+        buf, errbuf = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(errbuf):
+            rc = cli.main([
+                "--no-color",
+                "health_report",
+                str(self.repo),
+                "--complexity-threshold", "1",
+                "--long-threshold", "10",
+                "--top-n", "5",
+                "--save-baseline", str(snap),
+                "--out", str(out_md),
+            ])
+            self.assertEqual(rc, 0)
+            self.assertTrue(snap.exists())
+            # The saved snapshot must round-trip through the loader.
+            loaded = json.loads(snap.read_text(encoding="utf-8"))
+            self.assertIn("summary", loaded)
+            self.assertIn("complexity", loaded["summary"])
+
+            # Re-run with the snapshot as baseline.
+            rc2 = cli.main([
+                "--no-color",
+                "health_report",
+                str(self.repo),
+                "--complexity-threshold", "1",
+                "--long-threshold", "10",
+                "--top-n", "5",
+                "--baseline", str(snap),
+                "--out", str(out_md2),
+            ])
+            self.assertEqual(rc2, 0)
+        md = out_md2.read_text(encoding="utf-8")
+        self.assertIn("## 8. Drift since baseline", md)
+        self.assertIn("0** regression(s)", md)
+
+    def test_cli_baseline_missing_file_returns_error(self) -> None:
+        buf, errbuf = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(errbuf):
+            rc = cli.main([
+                "--no-color",
+                "health_report",
+                str(self.repo),
+                "--baseline", str(self.tmp_root / "no_such_file.json"),
+            ])
+        self.assertEqual(rc, 2)
+        self.assertIn("cannot read baseline", errbuf.getvalue())
 
     def test_baseline_with_synthetic_regression(self) -> None:
         # Snapshot, then mutate the snapshot to pretend things were better

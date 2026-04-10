@@ -476,6 +476,16 @@ def _cmd_health_report(args) -> int:
         top_n=args.top_n,
         baseline=baseline_summary,
     )
+    # Save snapshot to disk if requested. Done before --json/--out so a single
+    # invocation can write a baseline AND emit a report in the same pass.
+    if args.save_baseline:
+        snap_path = Path(args.save_baseline)
+        snap_path.parent.mkdir(parents=True, exist_ok=True)
+        snap_payload = {"repo_path": rep.repo_path, "summary": rep.summary}
+        snap_path.write_text(
+            json.dumps(snap_payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
     if args.json:
         _print_json({"repo_path": rep.repo_path, "summary": rep.summary})
         return 0
@@ -499,8 +509,12 @@ def _cmd_health_report(args) -> int:
                 f"  drift: {paint(str(d['regression_count']) + ' regression(s)')}, "
                 f"{green(str(d['improvement_count']) + ' improvement(s)')}"
             ))
+        if args.save_baseline:
+            print(dim(f"  snapshot saved to {_path(args.save_baseline)}"))
         return 0
     print(rep.markdown)
+    if args.save_baseline:
+        print(dim(f"\n[snapshot saved to {args.save_baseline}]"), file=sys.stderr)
     return 0
 
 
@@ -661,6 +675,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="load a previous --json snapshot from FILE and add a drift section",
+    )
+    phr.add_argument(
+        "--save-baseline",
+        type=str,
+        default=None,
+        help="write a JSON snapshot of this report to FILE for use with --baseline",
     )
     phr.add_argument("--json", action="store_true")
     phr.set_defaults(func=_cmd_health_report)
