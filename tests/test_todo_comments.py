@@ -159,6 +159,33 @@ class ParseCommentTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result[0], "todo")
 
+    def test_xxx_in_format_specifier_not_matched(self) -> None:
+        """Dogfooding on JARVIS surfaced this: `average:X.XXX` matched
+        because `.` is a word/non-word boundary. Real tags are always
+        preceded by whitespace or a comment marker, never glued to
+        another identifier-ish token."""
+        self.assertIsNone(
+            _parse_comment(
+                '# Parse average PSNR from stderr: "PSNR y:... average:X.XXX"'
+            )
+        )
+
+    def test_tag_after_paren(self) -> None:
+        """'(TODO)' style still matches - common in inline review notes."""
+        result = _parse_comment("# (TODO) revisit after v2")
+        assert result is not None
+        self.assertEqual(result[0], "todo")
+
+    def test_tag_after_bracket(self) -> None:
+        """'[FIXME]' style also matches."""
+        result = _parse_comment("# [FIXME] broken in edge case")
+        assert result is not None
+        self.assertEqual(result[0], "fixme")
+
+    def test_tag_glued_to_dot_rejected(self) -> None:
+        """Extra safety: `foo.TODO` is not a real tag, it's a dotted attr."""
+        self.assertIsNone(_parse_comment("# see config.TODO_LIST for details"))
+
 
 class ExtractCommentsTests(unittest.TestCase):
     """Integration-style: write a file, run tokenize, check output."""

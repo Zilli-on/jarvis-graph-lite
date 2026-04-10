@@ -76,7 +76,17 @@ from pathlib import Path
 
 from jarvis_graph.db import connect
 
-_TAG_RE = re.compile(r"\b(TODO|FIXME|XXX|HACK|BUG)\b", re.IGNORECASE)
+# We require the tag to be preceded by start-of-string, whitespace, '#',
+# or one of a few bullet-style characters ('(', '[', '{', '*', '-').
+# A naive \bTAG\b matches inside things like `average:X.XXX` because `.`
+# is a word/non-word boundary — dogfooding on JARVIS surfaced exactly
+# this false positive in an amv_engine subprocess parse comment. Real
+# TODO comments are always introduced by whitespace or a comment marker;
+# gluing `XXX` onto the end of an identifier-ish token isn't a real tag.
+_TAG_RE = re.compile(
+    r"(?:^|[\s#(\[{*\-])(TODO|FIXME|XXX|HACK|BUG)\b",
+    re.IGNORECASE,
+)
 
 # Tag weights: BUG and HACK are worst (self-admitted correctness issues),
 # FIXME is middle (something is broken but maybe bounded), TODO / XXX
