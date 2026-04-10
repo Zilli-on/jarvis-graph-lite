@@ -13,8 +13,9 @@ Usage:
     jarvis-graph detect_changes <repo>
     jarvis-graph summary <repo>
     jarvis-graph find_dead_code       <repo>
-    jarvis-graph find_coverage_gaps   <repo> [--min-complexity N] [--limit N]
-    jarvis-graph find_unused_imports  <repo>
+    jarvis-graph find_coverage_gaps     <repo> [--min-complexity N] [--limit N]
+    jarvis-graph generate_test_skeleton <repo> <symbol> [--out FILE] [--force]
+    jarvis-graph find_unused_imports    <repo>
     jarvis-graph find_circular_deps   <repo>
     jarvis-graph find_complexity      <repo> [--threshold N] [--limit N]
     jarvis-graph find_long_functions  <repo> [--threshold N] [--limit N]
@@ -122,6 +123,11 @@ from jarvis_graph.indexer import index_repo
 from jarvis_graph.long_functions_engine import find_long_functions
 from jarvis_graph.query_engine import query as run_query
 from jarvis_graph.repo_summary import summarize
+from jarvis_graph.test_skeleton_engine import (
+    SkeletonError,
+    generate_test_skeleton,
+    write_skeleton,
+)
 from jarvis_graph.unused_imports_engine import find_unused_imports
 
 
@@ -393,6 +399,40 @@ def _cmd_find_coverage_gaps(args) -> int:
             f"cmplx={g.complexity} loc={g.line_count} callers={g.caller_count}  "
             f"({_path(f'{g.rel_path}:{g.lineno}')})"
         )
+    return 0
+
+
+def _cmd_generate_test_skeleton(args) -> int:
+    repo = Path(args.repo)
+    try:
+        skel = generate_test_skeleton(repo, args.symbol)
+    except SkeletonError as e:
+        print(red(f"generate_test_skeleton: {e}"), file=sys.stderr)
+        return 1
+    if args.json:
+        _print_json(asdict(skel))
+        return 0
+    if args.out:
+        try:
+            written = write_skeleton(skel, Path(args.out), force=args.force)
+        except SkeletonError as e:
+            print(red(f"generate_test_skeleton: {e}"), file=sys.stderr)
+            return 1
+        print(bold(f"generate_test_skeleton: {repo.resolve()}"))
+        print(
+            dim(
+                f"  target: {skel.symbol_kind} {skel.symbol_qname}  "
+                f"(import: {skel.target_module}.{skel.target_name})"
+            )
+        )
+        print(f"  written to {_path(str(written))}")
+        return 0
+    # No --out: print the skeleton to stdout so the user can pipe it.
+    print(bold(f"generate_test_skeleton: {skel.symbol_qname}"))
+    print(dim(f"  kind={skel.symbol_kind}  module={skel.target_module}"))
+    print(dim(f"  suggested filename: {skel.suggested_filename}"))
+    print()
+    print(skel.body)
     return 0
 
 
@@ -757,6 +797,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pcg.add_argument("--json", action="store_true")
     pcg.set_defaults(func=_cmd_find_coverage_gaps)
+
+    pgts = sub.add_parser(
+        "generate_test_skeleton",
+        help="Emit a unittest.TestCase skeleton for the given symbol (closes the find_coverage_gaps loop)",
+    )
+    pgts.add_argument("repo")
+    pgts.add_argument(
+        "symbol",
+        help="qualified_name (preferred) or bare name of a function/method/class",
+    )
+    pgts.add_argument(
+        "--out",
+        help="write the generated skeleton to this path; default prints to stdout",
+    )
+    pgts.add_argument(
+        "--force",
+        action="store_true",
+        help="allow --out to overwrite an existing file",
+    )
+    pgts.add_argument("--json", action="store_true")
+    pgts.set_defaults(func=_cmd_generate_test_skeleton)
 
     pui = sub.add_parser("find_unused_imports", help="List unused import statements")
     pui.add_argument("repo")

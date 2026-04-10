@@ -4,7 +4,7 @@ A tiny **local** code-intelligence index for Python repos.
 Stdlib only. No embeddings. No daemons. No external services.
 Runs on Win10, Python 3.11, in seconds, on a 9-year-old i5 with 8 GB RAM.
 
-It answers fourteen questions about a repo:
+It answers fifteen questions about a repo:
 
 1. **`query`** — *where does this concept live?*  (with `--and` for strict AND across tokens, plus a recency boost)
 2. **`context`** — *what is this symbol or file's role?*
@@ -20,6 +20,7 @@ It answers fourteen questions about a repo:
 12. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
 13. **`find_high_fan_out`** — *which files import too much of the rest of the repo?* (the symmetric counterpart to `find_god_files` — high fan-out flags client hubs that break first when their many dependencies move)
 14. **`health_report`** — *one Markdown file aggregating all of the above (10 sections, including a `Coverage gaps` block driven by `find_coverage_gaps`). With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section that tracks `coverage_pct` and the coverage-gap set diff alongside every other metric.*
+15. **`generate_test_skeleton`** — *given a symbol qname (the kind of thing `find_coverage_gaps` returns), emit a unittest.TestCase skeleton with the right import, the `<Subject>Tests` suffix-convention class, one `test_*_smoke` method per public method, and `raise NotImplementedError` in every body so the stub fails until you fill it in. Closes the loop from "find untested code" to "start writing the test".*
 
 Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
 
@@ -79,6 +80,10 @@ python -m jarvis_graph find_high_fan_out   C:\JARVIS --threshold 8
 
 :: 5. one report to rule them all
 python -m jarvis_graph health_report       C:\JARVIS --out HEALTH.md
+
+:: 5b. find an untested high-complexity symbol, then scaffold a test for it
+python -m jarvis_graph find_coverage_gaps     C:\JARVIS --min-complexity 10
+python -m jarvis_graph generate_test_skeleton C:\JARVIS render_amv --out C:\JARVIS\tests\test_render_amv.py
 
 :: 6. take a snapshot today, diff it tomorrow
 python -m jarvis_graph health_report C:\JARVIS --save-baseline snap.json --out HEALTH.md
@@ -155,6 +160,7 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   find_god_files      <repo> [--limit N]               [--json]
   find_high_fan_out   <repo> [--threshold N] [--limit N] [--json]
   health_report       <repo> [--out FILE] [--top-n N] [--fan-out-threshold N] [--coverage-min-complexity N] [--baseline FILE] [--save-baseline FILE]  [--json]
+  generate_test_skeleton <repo> <symbol> [--out FILE] [--force] [--json]
 ```
 
 `<symbol-or-file>` resolves in this order: exact qualified name → qualified-name suffix (for dotted `Class.method`) → parent-qname suffix (for `Class.method` where `Class` is in another module) → exact symbol name → file path substring.
