@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarvis-graph-lite"
-version = "0.1.0"
+version = "0.12.4"
 description = "Repo-local code intelligence layer for Python projects. Stdlib only."
 requires-python = ">=3.11"
 dependencies = []
