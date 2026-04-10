@@ -19,7 +19,7 @@ It answers fourteen questions about a repo:
 11. **`find_long_functions`** — *which functions are over the line-count threshold?*
 12. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
 13. **`find_high_fan_out`** — *which files import too much of the rest of the repo?* (the symmetric counterpart to `find_god_files` — high fan-out flags client hubs that break first when their many dependencies move)
-14. **`health_report`** — *one Markdown file aggregating all of the above. With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section.*
+14. **`health_report`** — *one Markdown file aggregating all of the above (10 sections, including a `Coverage gaps` block driven by `find_coverage_gaps`). With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section that tracks `coverage_pct` and the coverage-gap set diff alongside every other metric.*
 
 Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
 
@@ -154,7 +154,7 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   find_long_functions <repo> [--threshold N] [--limit N] [--json]
   find_god_files      <repo> [--limit N]               [--json]
   find_high_fan_out   <repo> [--threshold N] [--limit N] [--json]
-  health_report       <repo> [--out FILE] [--top-n N] [--fan-out-threshold N] [--baseline FILE] [--save-baseline FILE]  [--json]
+  health_report       <repo> [--out FILE] [--top-n N] [--fan-out-threshold N] [--coverage-min-complexity N] [--baseline FILE] [--save-baseline FILE]  [--json]
 ```
 
 `<symbol-or-file>` resolves in this order: exact qualified name → qualified-name suffix (for dotted `Class.method`) → parent-qname suffix (for `Class.method` where `Class` is in another module) → exact symbol name → file path substring.

@@ -225,9 +225,11 @@ The `DISTINCT` collapses duplicate imports of the same file (e.g. `from x import
 
 ### health_report
 
-Calls every other engine in turn (complexity, long functions, god files, **fan-out**, dead code, unused imports, circular deps), assembles their reports into an 8-section Markdown document, and computes a "summary" payload for JSON consumers (so other tools don't need to parse the Markdown). Top-N defaults to 15. Output goes to a file via `--out` or to stdout.
+Calls every other engine in turn (complexity, long functions, god files, **fan-out**, dead code, **coverage gaps**, unused imports, circular deps), assembles their reports into a 9-section Markdown document, and computes a "summary" payload for JSON consumers (so other tools don't need to parse the Markdown). Top-N defaults to 15. Output goes to a file via `--out` or to stdout.
 
-When `--baseline FILE` is supplied, the report loads a previous JSON snapshot and adds a section 9 ("Drift since baseline") via `drift_engine`. The summary payload also gains a `drift` key with `regression_count`, `improvement_count`, and structured per-metric details. The baseline loader accepts both shapes the CLI emits: the full `{"repo_path": ..., "summary": {...}}` envelope and the bare summary payload.
+When `--baseline FILE` is supplied, the report loads a previous JSON snapshot and adds a section 10 ("Drift since baseline") via `drift_engine`. The summary payload also gains a `drift` key with `regression_count`, `improvement_count`, and structured per-metric details. The baseline loader accepts both shapes the CLI emits: the full `{"repo_path": ..., "summary": {...}}` envelope and the bare summary payload.
+
+The `--coverage-min-complexity N` flag (default 5) is plumbed through to `find_coverage_gaps` so the section 7 table only surfaces untested public symbols above the cyclomatic threshold — keeps the noise down on small leaf helpers that nobody really wants to test.
 
 ### drift_engine
 
@@ -235,8 +237,8 @@ A pure function pair (`compute_drift` + `render_drift_markdown`) that compares t
 
 Two flavours of drift:
 
-- **Scalar drift** — numeric metrics (`hotspot_count`, `dead_code.count`, `cycles.count`, resolution percentages, …) compared as `(baseline, current, delta)`. Each metric is tagged `worsened` (delta moved in the bad direction), `improved` (moved in the good direction), `unchanged`, or `neutral` (informational totals like file/symbol counts where no direction is meaningful). The direction comes from a small per-metric table inside the engine, not from inference.
-- **Set drift** — ranked lists (top hotspots, top god files, dead-code symbols, cycles) compared as sets keyed by a stable id (`qualified_name` for symbols, `rel_path` for files, sorted member tuple for cycles). The result is `regressions` (newly in the list), `improvements` (left the list), and `unchanged` (count of overlap). The engine deliberately skips a set diff if either side is missing the path entirely — that prevents an older baseline from a tool version that didn't track these lists from showing every current entry as a regression.
+- **Scalar drift** — numeric metrics (`hotspot_count`, `dead_code.count`, `cycles.count`, `coverage.coverage_pct`, `coverage.gap_count`, resolution percentages, …) compared as `(baseline, current, delta)`. Each metric is tagged `worsened` (delta moved in the bad direction), `improved` (moved in the good direction), `unchanged`, or `neutral` (informational totals like file/symbol counts where no direction is meaningful). The direction comes from a small per-metric table inside the engine, not from inference. `coverage_pct` is one of the rare `up`-direction metrics (higher is better), alongside the import/call resolution percentages.
+- **Set drift** — ranked lists (top hotspots, top god files, dead-code symbols, **coverage gaps**, cycles) compared as sets keyed by a stable id (`qualified_name` for symbols, `rel_path` for files, sorted member tuple for cycles). The result is `regressions` (newly in the list), `improvements` (left the list), and `unchanged` (count of overlap). The engine deliberately skips a set diff if either side is missing the path entirely — that prevents an older baseline from a tool version that didn't track these lists from showing every current entry as a regression.
 
 To make set drift work, `health_report` had to enrich its summary payload to include the actual top-N entries with stable ids (not just counts). The old `dead_code_count` / `unused_import_count` / `cycle_count` scalar fields are still emitted as back-compat aliases.
 

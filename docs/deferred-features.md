@@ -40,6 +40,10 @@ Things that were considered and **explicitly left out**, with the trigger that w
 
 - **Test-coverage gaps** (`find_coverage_gaps`). Static reachability analysis — *not* runtime coverage. Multi-source forward BFS over `call_edge.resolved_symbol_id` with a single shared visited set, seeded from every test entry point (functions named `test_*` in test files, plus `setUp`/`tearDown` on `Test*` classes). Anything in the public-symbol pool that the BFS never visited is a coverage gap. Sorted by complexity desc → line_count desc so the most *risky* untested code surfaces first. `--min-complexity` lets you focus on the high-cyclomatic bucket. Validation on JARVIS today: 3.4% coverage (well-known) — top gap is `lyrc-local/amv_engine.render_amv` at cyclomatic 184, exactly the function we already wanted to test. Catches dynamic-dispatch blind spots like `StatusHandler.do_GET` (cmplx 91, callers=0 because `BaseHTTPRequestHandler` dispatches via reflection) — surfaced because static reachability is honest about what it can and can't see.
 
+## Promoted out of this file in v0.9
+
+- **Coverage gaps in `health_report` + drift**. Section 7 of the aggregated report now embeds the top untested risky symbols, sandwiched between dead code (6) and unused imports (8) — the natural place because dead code answers "never called from anywhere" and coverage gaps answer the more useful "never called *from a test*". `drift_engine` gained two scalar metrics (`coverage.coverage_pct` with direction `up`, and `coverage.gap_count` with direction `down`) and a set diff over `coverage.gaps` keyed by `qualified_name`. The whole drift section header bumped from `## 9` to `## 10` to make room. The CLI got a new `--coverage-min-complexity N` flag (default 5) so the section 7 table only shows the high-risk untested code and not every leaf helper. Validation on JARVIS today: drift correctly reports `coverage % 5.00 → 3.40 worsened (-1.60)` and lists the 5 newly-uncovered symbols by qname when fed a mutated baseline. The full test suite is now 120 passing.
+
 ## Still deferred
 
 | Feature | Why deferred | Trigger to add |

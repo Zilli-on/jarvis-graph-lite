@@ -3,7 +3,7 @@
 Calls the existing engines and stitches their results into one document, so
 the user gets a complete "state of the repo" view from a single CLI invocation.
 
-The report has eight fixed sections plus an optional drift section when a
+The report has nine fixed sections plus an optional drift section when a
 baseline is supplied:
   1. Headline numbers (files, symbols, calls, resolution rate)
   2. Hotspots (top complexity)
@@ -11,9 +11,10 @@ baseline is supplied:
   4. God files — high fan-in (top by composite score)
   5. Client hubs — high fan-out (files importing many others)
   6. Dead code (top dead candidates)
-  7. Unused imports (top files with most unused imports)
-  8. Circular dependencies (full list)
-  9. Drift since baseline (only when --baseline is provided)
+  7. Coverage gaps (top untested risky symbols)
+  8. Unused imports (top files with most unused imports)
+  9. Circular dependencies (full list)
+ 10. Drift since baseline (only when --baseline is provided)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from typing import Any
 
 from jarvis_graph.circular_deps_engine import find_circular_deps
 from jarvis_graph.complexity_engine import find_complexity
+from jarvis_graph.coverage_gap_engine import find_coverage_gaps
 from jarvis_graph.db import connect
 from jarvis_graph.dead_code_engine import find_dead_code
 from jarvis_graph.drift_engine import compute_drift, render_drift_markdown
@@ -106,6 +108,7 @@ def health_report(
     long_threshold: int = 50,
     top_n: int = 15,
     fan_out_threshold: int = 8,
+    coverage_min_complexity: int = 5,
     baseline: dict | None = None,
 ) -> HealthReport:
     repo_path = repo_path.resolve()
@@ -115,6 +118,11 @@ def health_report(
     god = find_god_files(repo_path, limit=top_n)
     fan_out = find_high_fan_out(repo_path, threshold=fan_out_threshold, limit=top_n)
     dead = find_dead_code(repo_path)
+    coverage = find_coverage_gaps(
+        repo_path,
+        limit=top_n,
+        min_complexity=coverage_min_complexity,
+    )
     unused = find_unused_imports(repo_path)
     cycles = find_circular_deps(repo_path)
 
@@ -241,8 +249,38 @@ def health_report(
         lines.append("_None._")
     lines.append("")
 
-    # 7. unused imports
-    lines.append("## 7. Unused imports")
+    # 7. coverage gaps
+    lines.append(
+        f"## 7. Coverage gaps (untested public symbols, "
+        f"min_complexity={coverage_min_complexity})"
+    )
+    lines.append("")
+    if coverage.test_entry_points == 0:
+        lines.append(f"_{coverage.note}_")
+    else:
+        lines.append(
+            f"- coverage = **{coverage.coverage_pct}%** "
+            f"({coverage.reached_count} reached / "
+            f"{coverage.total_public_symbols} public symbols, "
+            f"{coverage.test_entry_points} test entry points)"
+        )
+        lines.append("")
+        if coverage.gaps:
+            lines.append("Top untested risky symbols (sorted by complexity):")
+            lines.append("")
+            lines.append("| # | cyclomatic | lines | callers | symbol | file |")
+            lines.append("|--:|--:|--:|--:|---|---|")
+            for i, g in enumerate(coverage.gaps, 1):
+                lines.append(
+                    f"| {i} | {g.complexity} | {g.line_count} | {g.caller_count} | "
+                    f"`{g.qualified_name}` | `{g.rel_path}:{g.lineno}` |"
+                )
+        else:
+            lines.append("_No gaps over min_complexity._")
+    lines.append("")
+
+    # 8. unused imports
+    lines.append("## 8. Unused imports")
     lines.append("")
     lines.append(f"- {len(unused.unused)} unused of {unused.total_imports} imports")
     lines.append("")
@@ -257,8 +295,8 @@ def health_report(
         lines.append("_None._")
     lines.append("")
 
-    # 8. circular deps
-    lines.append("## 8. Circular dependencies")
+    # 9. circular deps
+    lines.append("## 9. Circular dependencies")
     lines.append("")
     lines.append(f"- {len(cycles.cycles)} cycle(s) on "
                  f"{cycles.total_files} files / {cycles.total_edges} resolved edges")
@@ -341,6 +379,26 @@ def health_report(
                     "kind": d.kind,
                 }
                 for d in dead.dead[:top_n]
+            ],
+        },
+        "coverage": {
+            "test_entry_points": coverage.test_entry_points,
+            "reached_count": coverage.reached_count,
+            "total_public_symbols": coverage.total_public_symbols,
+            "coverage_pct": coverage.coverage_pct,
+            "min_complexity": coverage_min_complexity,
+            "gap_count": len(coverage.gaps),
+            "gaps": [
+                {
+                    "qname": g.qualified_name,
+                    "rel_path": g.rel_path,
+                    "lineno": g.lineno,
+                    "kind": g.kind,
+                    "complexity": g.complexity,
+                    "line_count": g.line_count,
+                    "caller_count": g.caller_count,
+                }
+                for g in coverage.gaps
             ],
         },
         "unused_imports": {

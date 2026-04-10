@@ -51,6 +51,8 @@ _SCALAR_SPECS: list[tuple[str, str, str]] = [
     ("unused imports",                 "unused_imports.count",                 "down"),
     ("import cycles",                  "cycles.count",                         "down"),
     ("high fan-out files",             "fan_out.count",                        "down"),
+    ("coverage %",                     "coverage.coverage_pct",                "up"),
+    ("coverage gaps (top-N)",          "coverage.gap_count",                   "down"),
 ]
 
 
@@ -241,6 +243,7 @@ def compute_drift(baseline: dict | None, current: dict) -> DriftReport:
         ("client hubs (fan-out)", "fan_out.files",              "path"),
         ("dead code symbols",    "dead_code.symbols",           "qname"),
         ("hot unused-import files", "unused_imports.top_files", "path"),
+        ("coverage gaps",        "coverage.gaps",               "qname"),
     ]
     for label, path, key in set_specs:
         sd = _set_drift(label, baseline, current, path, key)
@@ -254,12 +257,12 @@ def compute_drift(baseline: dict | None, current: dict) -> DriftReport:
 
 
 def render_drift_markdown(report: DriftReport) -> str:
-    """Render a single Markdown section ('## 9. Drift since baseline')."""
+    """Render a single Markdown section ('## 10. Drift since baseline')."""
     if not report.has_baseline:
         return ""
 
     lines: list[str] = []
-    lines.append("## 9. Drift since baseline")
+    lines.append("## 10. Drift since baseline")
     lines.append("")
     lines.append(
         f"- **{report.regression_count}** regression(s), "

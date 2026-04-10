@@ -28,6 +28,7 @@ class HealthReportTests(unittest.TestCase):
             long_threshold=10,
             top_n=5,
             fan_out_threshold=1,
+            coverage_min_complexity=1,
         )
         md = rep.markdown
         for section in (
@@ -37,8 +38,9 @@ class HealthReportTests(unittest.TestCase):
             "## 4. God files",
             "## 5. Client hubs",
             "## 6. Dead code candidates",
-            "## 7. Unused imports",
-            "## 8. Circular dependencies",
+            "## 7. Coverage gaps",
+            "## 8. Unused imports",
+            "## 9. Circular dependencies",
         ):
             self.assertIn(section, md, f"missing section: {section}")
 
@@ -77,7 +79,7 @@ class HealthReportTests(unittest.TestCase):
             top_n=5,
             baseline=rep.summary,
         )
-        self.assertIn("## 9. Drift since baseline", rep2.markdown)
+        self.assertIn("## 10. Drift since baseline", rep2.markdown)
         self.assertIn("drift", rep2.summary)
         self.assertEqual(rep2.summary["drift"]["regression_count"], 0)
 
@@ -120,7 +122,7 @@ class HealthReportTests(unittest.TestCase):
             ])
             self.assertEqual(rc2, 0)
         md = out_md2.read_text(encoding="utf-8")
-        self.assertIn("## 9. Drift since baseline", md)
+        self.assertIn("## 10. Drift since baseline", md)
         self.assertIn("0** regression(s)", md)
 
     def test_cli_baseline_missing_file_returns_error(self) -> None:

@@ -1,6 +1,7 @@
 """jarvis-graph CLI: index / query / context / impact / find_path / detect_changes
 plus the v0.2 + v0.3 health-check engines, v0.5 baseline drift, v0.6 fan-out,
-v0.7 call-chain finder, and v0.8 test-coverage gaps.
+v0.7 call-chain finder, v0.8 test-coverage gaps, and v0.9 coverage in
+health_report + drift.
 
 Usage:
     jarvis-graph index <repo>            # incremental
@@ -567,6 +568,7 @@ def _cmd_health_report(args) -> int:
         long_threshold=args.long_threshold,
         top_n=args.top_n,
         fan_out_threshold=args.fan_out_threshold,
+        coverage_min_complexity=args.coverage_min_complexity,
         baseline=baseline_summary,
     )
     # Save snapshot to disk if requested. Done before --json/--out so a single
@@ -813,6 +815,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=8,
         help="files with this many in-repo imports or more get flagged in section 5",
+    )
+    phr.add_argument(
+        "--coverage-min-complexity",
+        type=int,
+        default=5,
+        help="minimum cyclomatic complexity for a coverage gap to surface in section 7",
     )
     phr.add_argument(
         "--out",

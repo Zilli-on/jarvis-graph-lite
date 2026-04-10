@@ -196,7 +196,7 @@ class ComputeDriftTests(unittest.TestCase):
         baseline = _baseline_summary()
         rep = compute_drift(baseline, baseline)
         md = render_drift_markdown(rep)
-        self.assertIn("## 9. Drift since baseline", md)
+        self.assertIn("## 10. Drift since baseline", md)
         self.assertIn("No measurable drift", md)
 
     def test_render_lists_regressions_and_improvements(self) -> None:
