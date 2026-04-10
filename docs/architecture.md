@@ -192,9 +192,15 @@ The "no test entry points" case returns an empty result with a friendly note exp
 
 ### find_unused_imports
 
-For each `import_edge`, compute the local binding name (`alias` if present, else `imported_name` for `from X import Y`, else the first segment of `imported_module` for `import X`). Then scan the file's source with a token regex, **after stripping import lines** (including multi-line `from X import (a, b, c)` paren-wrapped forms). If the binding name is not in the resulting token set and the module is not in `_SIDE_EFFECT_MODULES` (`__future__`, `warnings`, `logging.config`, …), flag it.
+For each `import_edge`, compute the local binding name (`alias` if present, else `imported_name` for `from X import Y`, else the first segment of `imported_module` for `import X`). Then walk three suppression paths in order:
 
-The strip-imports step is critical: without it, every `from typing import Dict` would look used because `Dict` appears on its own definition line.
+1. **Call-graph path**: if any `call_edge` in the same file uses the binding as its callee head, it's used.
+2. **Textual token path**: scan the file's source with a token regex, **after stripping import lines** (including multi-line `from X import (a, b, c)` paren-wrapped forms). If the binding name appears in the token set outside the import statements, it's used. Catches type annotations, `isinstance()` checks, class bases, decorator `@references`, and bare attribute reads — all things that don't produce call edges.
+3. **`# noqa` path** (v0.12.2): read the logical import line (joining physical continuation lines for multi-line forms) and scan for a `# noqa` or `# noqa: F401` directive. Blanket `# noqa` and specific `# noqa: F401` both suppress; specific non-F401 directives (`# noqa: E501`) do not. Valid codes are extracted with `\b[A-Z]{1,3}\d{3,4}\b` so trailing commentary (`# noqa: F401  path setup`) is tolerated. Required because pytest/unittest test suites routinely import fixtures from `conftest` purely for side effects.
+
+The strip-imports step in path 2 is critical: without it, every `from typing import Dict` would look used because `Dict` appears on its own definition line.
+
+If the module is in `_SIDE_EFFECT_MODULES` (`__future__`, `warnings`, `logging.config`, …), it's skipped before any path runs.
 
 ### find_circular_deps
 

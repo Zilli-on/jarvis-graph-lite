@@ -7,10 +7,13 @@ For each import_edge we determine the local binding name:
   - `from X import Y`       → 'Y'
   - `from X import Y as Z`  → 'Z'
 
-An import is flagged as *unused* when **neither** of the following is true:
+An import is flagged as *unused* when **none** of the following are true:
   1. A call_edge in the same file references it (callee head matches), OR
   2. The local binding name appears as a textual token anywhere in the file
-     OUTSIDE of import statements.
+     OUTSIDE of import statements, OR
+  3. The import line carries a `# noqa` or `# noqa: F401` suppression
+     directive (flake8 / ruff convention for intentional side-effect
+     imports — e.g. `from conftest import ROOT  # noqa: F401`).
 
 The textual fallback catches type annotations, isinstance() checks, class
 bases, decorator @references, and bare attribute reads — all things that
@@ -33,6 +36,66 @@ from jarvis_graph.db import connect
 
 
 _TOKEN_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+# Top-level directive: matches `# noqa` or `# noqa: <codes>` with an
+# optional (greedy-to-end-of-line) code list.  The code list may contain
+# additional commentary (`# noqa: F401  path setup`) — we extract valid
+# codes from it with a second regex below.
+_NOQA_RE = re.compile(
+    r"#\s*noqa\b(?:\s*:\s*([^\r\n]*))?",
+    re.IGNORECASE,
+)
+# A single flake8 / ruff / pylint style code: one or two letters followed
+# by 3-4 digits (F401, E501, W605, RUF001, etc.).
+_NOQA_CODE_RE = re.compile(r"\b[A-Z]{1,3}\d{3,4}\b")
+
+
+def _noqa_allows_unused_import(text: str) -> bool:
+    """True if `text` contains a `# noqa` directive covering F401.
+
+    Blanket `# noqa` (no code list or empty code list) suppresses
+    everything. `# noqa: F401` specifically suppresses unused-import.
+    `# noqa: E501` does NOT suppress F401 and returns False. Additional
+    commentary after the code list is tolerated
+    (`# noqa: F401  path setup`).
+    """
+    for m in _NOQA_RE.finditer(text):
+        codes_raw = m.group(1)
+        if codes_raw is None or not codes_raw.strip():
+            return True  # blanket `# noqa` or `# noqa:` with nothing after
+        codes = _NOQA_CODE_RE.findall(codes_raw.upper())
+        if not codes:
+            # `# noqa: something-weird` with no recognisable codes —
+            # treat conservatively as blanket suppression (matches
+            # flake8's behaviour).
+            return True
+        if "F401" in codes:
+            return True
+    return False
+
+
+def _logical_import_line(lines: list[str], lineno: int) -> str:
+    """Return the source of the import statement at `lineno` (1-indexed).
+
+    For multi-line `from X import (\n  a,\n  b,\n)` the returned string
+    joins all physical lines from the opening paren to the matching
+    closing paren so noqa directives placed on any continuation line are
+    visible to the caller.
+    """
+    idx = lineno - 1
+    if idx < 0 or idx >= len(lines):
+        return ""
+    first = lines[idx]
+    if "(" in first and ")" not in first:
+        out = [first]
+        j = idx + 1
+        while j < len(lines):
+            out.append(lines[j])
+            if ")" in lines[j]:
+                break
+            j += 1
+        return "\n".join(out)
+    return first
 
 
 def _scan_non_import_tokens(file_path: Path) -> set[str]:
@@ -114,6 +177,8 @@ def find_unused_imports(repo_path: Path) -> UnusedImportsReport:
         ).fetchall()
         # Cache: file_id → set of identifier tokens outside import lines.
         token_cache: dict[int, set[str]] = {}
+        # Cache: file_id → list of physical source lines (for noqa scan).
+        source_cache: dict[int, list[str]] = {}
 
         for r in rows:
             rep.total_imports += 1
@@ -143,6 +208,21 @@ def find_unused_imports(repo_path: Path) -> UnusedImportsReport:
             if file_id not in token_cache:
                 token_cache[file_id] = _scan_non_import_tokens(Path(r["abs_path"]))
             if binding in token_cache[file_id]:
+                continue
+            # Path 3: `# noqa` / `# noqa: F401` suppression on the import
+            # line (flake8 / ruff convention for intentional side-effect
+            # imports — e.g. `from conftest import ROOT  # noqa: F401`).
+            if file_id not in source_cache:
+                try:
+                    source_cache[file_id] = (
+                        Path(r["abs_path"])
+                        .read_text(encoding="utf-8", errors="replace")
+                        .splitlines()
+                    )
+                except OSError:
+                    source_cache[file_id] = []
+            logical = _logical_import_line(source_cache[file_id], int(r["lineno"]))
+            if _noqa_allows_unused_import(logical):
                 continue
             rep.unused.append(
                 UnusedImport(

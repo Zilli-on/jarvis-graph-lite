@@ -13,7 +13,7 @@ It answers seventeen questions about a repo:
 5. **`detect_changes`** — *what's drifted since I last indexed?*
 6. **`find_dead_code`** — *which functions/classes/methods are never referenced anywhere?*
 7. **`find_coverage_gaps`** — *which public symbols are never reached from a test?*  (multi-source forward BFS from every test entry point — flags the high-complexity untested code first)
-8. **`find_unused_imports`** — *which imports are never used in their file?*
+8. **`find_unused_imports`** — *which imports are never used in their file?*  (honours `# noqa: F401` suppression for intentional side-effect imports — so `from conftest import ROOT  # noqa: F401` is correctly NOT flagged)
 9. **`find_circular_deps`** — *are there import cycles in the repo?*
 10. **`find_complexity`** — *which functions are too tangled?* (McCabe cyclomatic, low → extreme buckets)
 11. **`find_long_functions`** — *which functions are over the line-count threshold?*
