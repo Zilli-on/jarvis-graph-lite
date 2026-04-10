@@ -32,6 +32,10 @@ Things that were considered and **explicitly left out**, with the trigger that w
 
 - **High fan-out detection** (`find_high_fan_out`). Symmetric counterpart to `find_god_files`: instead of asking "which file is imported by too many others?", it asks "which file imports too many others?". Same SQL pattern (one select against `import_edge`) with `COUNT(DISTINCT CASE WHEN ie.resolved_file_id ...)` so duplicate imports of the same file collapse to a single fan-out edge. `health_report` gained a section 5 ("Client hubs") and `drift_engine` tracks `fan_out.count` as a scalar metric and the file list as a set diff. Top hub on JARVIS today: `tools/jarvis-graph-lite/src/jarvis_graph/cli.py` with fan_out=14 — legitimate (the CLI aggregates every engine).
 
+## Promoted out of this file in v0.7
+
+- **Shortest call-chain finder** (`find_path`). `impact` shows the blast radius if you change a symbol; the gap it left is "how does my code *get to* this expensive helper?". `find_path` is a forward BFS over `call_edge.resolved_symbol_id` with parent-map path reconstruction, bounded by `max_depth` (default 8). Reuses `_resolve_target` from `context_engine` so dotted names, bare names, and `Class.method` all work as endpoints. Validation on JARVIS: `jarvis_brain.main → execute_tool` resolves to a 4-step cross-module chain (`main → mode_auto → _execute_task → AutonomousAgent.run → execute_tool`) in ~44 nodes explored. Catches the bare-name pitfall in `_resolve_target`: when a file `entry.py` defines `def entry()`, the `<module>` synthetic row's `qualified_name` collides with the function — fixed with a fall-through that prefers a callable over a module-kind hit when both share the bare name.
+
 ## Still deferred
 
 | Feature | Why deferred | Trigger to add |

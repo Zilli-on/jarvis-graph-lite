@@ -31,13 +31,32 @@ class ContextResult:
 
 
 def _resolve_target(conn, target: str) -> tuple[str, dict] | None:
-    # 1. exact qualified name
+    # 1. exact qualified name.
+    # Order so that *real* symbols beat the synthetic <module> row whenever
+    # both share a qualified_name.
     row = conn.execute(
         "SELECT s.*, f.rel_path FROM symbol s JOIN file f ON f.file_id=s.file_id "
-        "WHERE s.qualified_name = ? LIMIT 1",
+        "WHERE s.qualified_name = ? "
+        "ORDER BY CASE WHEN s.kind = 'module' THEN 1 ELSE 0 END, s.is_private "
+        "LIMIT 1",
         (target,),
     ).fetchone()
     if row:
+        # If the match is a synthetic <module> row (qualified_name == module_path),
+        # also look for a callable with the same bare name — callers passing
+        # "entry" when a file `entry.py` defines `def entry()` almost always
+        # mean the function, not the module. The <module> row has no resolved
+        # callees so keeping it would dead-end any call-graph walk.
+        if row["kind"] == "module":
+            alt = conn.execute(
+                "SELECT s.*, f.rel_path FROM symbol s "
+                "JOIN file f ON f.file_id=s.file_id "
+                "WHERE s.name = ? AND s.kind IN ('function','class','method') "
+                "ORDER BY s.is_private, s.kind LIMIT 1",
+                (target,),
+            ).fetchone()
+            if alt:
+                return "symbol", dict(alt)
         return "symbol", dict(row)
 
     # 1b. qualified_name suffix — `GreetingService.greet` matches

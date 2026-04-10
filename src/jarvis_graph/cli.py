@@ -1,5 +1,6 @@
-"""jarvis-graph CLI: index / query / context / impact / detect_changes / summary
-plus the v0.2 + v0.3 health-check engines, v0.5 baseline drift, and v0.6 fan-out.
+"""jarvis-graph CLI: index / query / context / impact / find_path / detect_changes
+plus the v0.2 + v0.3 health-check engines, v0.5 baseline drift, v0.6 fan-out,
+and v0.7 call-chain finder.
 
 Usage:
     jarvis-graph index <repo>            # incremental
@@ -7,6 +8,7 @@ Usage:
     jarvis-graph query <repo> "<question>" [--limit N] [--match-all]
     jarvis-graph context <repo> <symbol-or-file>
     jarvis-graph impact  <repo> <symbol-or-file>
+    jarvis-graph find_path <repo> <source> <target> [--max-depth N]
     jarvis-graph detect_changes <repo>
     jarvis-graph summary <repo>
     jarvis-graph find_dead_code       <repo>
@@ -109,6 +111,7 @@ from jarvis_graph.complexity_engine import find_complexity
 from jarvis_graph.context_engine import context as run_context
 from jarvis_graph.dead_code_engine import find_dead_code
 from jarvis_graph.fan_out_engine import find_high_fan_out
+from jarvis_graph.find_path_engine import find_path as run_find_path
 from jarvis_graph.god_files_engine import find_god_files
 from jarvis_graph.health_report_engine import health_report as run_health_report
 from jarvis_graph.impact_engine import impact as run_impact
@@ -268,6 +271,34 @@ def _cmd_impact(args) -> int:
     print("  why:")
     for reason in res.why:
         print(f"    - {dim(reason)}")
+    return 0
+
+
+def _cmd_find_path(args) -> int:
+    repo = Path(args.repo)
+    res = run_find_path(repo, args.source, args.target, max_depth=args.max_depth)
+    if args.json:
+        _print_json(asdict(res))
+        return 0
+    if not res.found:
+        print(bold(f"find_path: {args.source} → {args.target}"))
+        if res.source_qname:
+            print(f"  source: {dim(res.source_qname)}")
+        if res.target_qname:
+            print(f"  target: {dim(res.target_qname)}")
+        print(red(f"  no path: {res.note}"))
+        return 1
+    print(
+        bold(f"find_path: {args.source} → {args.target}")
+        + f"  ({res.depth}-step chain, {res.nodes_explored} nodes explored)"
+    )
+    print(f"  source: {dim(res.source_qname or args.source)}")
+    print(f"  target: {dim(res.target_qname or args.target)}")
+    print()
+    for i, step in enumerate(res.steps):
+        loc = _path(f"{step.rel_path}:{step.lineno}")
+        prefix = "    " if i == 0 else "  → "
+        print(f"  {prefix}{bold(step.qualified_name)}  ({loc})")
     return 0
 
 
@@ -637,6 +668,21 @@ def _build_parser() -> argparse.ArgumentParser:
     pim.add_argument("target")
     pim.add_argument("--json", action="store_true")
     pim.set_defaults(func=_cmd_impact)
+
+    pfp = sub.add_parser(
+        "find_path", help="Find a shortest resolved call chain between two symbols"
+    )
+    pfp.add_argument("repo")
+    pfp.add_argument("source", help="symbol the chain starts from")
+    pfp.add_argument("target", help="symbol the chain should reach")
+    pfp.add_argument(
+        "--max-depth",
+        type=int,
+        default=8,
+        help="BFS depth cap (default 8)",
+    )
+    pfp.add_argument("--json", action="store_true")
+    pfp.set_defaults(func=_cmd_find_path)
 
     pd = sub.add_parser("detect_changes", help="Diff disk vs index")
     pd.add_argument("repo")

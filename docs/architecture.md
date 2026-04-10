@@ -27,6 +27,7 @@ src/jarvis_graph/
   query_engine.py          # locate (LIKE pool → ranker → AND/recency → top-N)
   context_engine.py        # explain (resolve → callers/callees/siblings/role_note)
   impact_engine.py         # blast radius (direct + second-order + risk score)
+  find_path_engine.py      # find_path (BFS shortest call chain across resolved call edges)
   change_detector.py       # disk vs db diff (added / modified / removed)
   repo_summary.py          # deterministic snapshot
   dead_code_engine.py      # find_dead_code (kind+filter+textual call+global token scan)
@@ -140,6 +141,19 @@ For a symbol: `direct_callers` from `call_edge.resolved_symbol_id`, `direct_impo
 `impact` accepts dotted names (`Class.method`, `module.Class.method`). Resolution falls through `qualified_name` → `qualified_name LIKE '%.target'` → `parent_qname` suffix match for `Class.method` patterns where the class lives in another module.
 
 This is intentionally a heuristic — call resolution is best-effort, so the numbers are a guide, not a proof.
+
+### find_path
+
+`impact` answers "what could break if I change X?" by counting reachable callers and second-order dependents. The natural follow-up — "how does my code *get to* this expensive call?" — is what `find_path` covers. Forward BFS over `call_edge.resolved_symbol_id`, parent map for path reconstruction, early-exit the moment the target is dequeued, bounded by `max_depth` (default 8). Both endpoints go through the same `_resolve_target` lookup as `context` and `impact`, so dotted names, bare names, and `Class.method` all work as input.
+
+The bare-name pitfall: if a file `entry.py` defines `def entry()`, parser_python emits two symbols — a synthetic `<module>` row with `qualified_name = "entry"` (the module path) and the function row with `qualified_name = "entry.entry"`. A `WHERE qualified_name = 'entry'` lookup matches only the module row, which has no resolved callees in this fixture, so any walk from there dead-ends. `_resolve_target` therefore detects the module-kind hit and falls through to a name-based lookup that prefers the function. Without this fall-through, half of `find_path`'s real-world inputs would fail with "1 nodes explored" even when a path obviously exists.
+
+The result is **one** shortest path, not all of them — BFS visits in level order, so the first chain it reconstructs is provably shortest. Cycles are handled via the `parent` visited-set; a node added to `parent` is never re-added.
+
+Limitations:
+- Unresolved call edges are invisible. If the path goes through a `getattr`-style dispatch table, BFS won't see it. `dead_code_engine`'s textual fallback exists precisely to compensate for this elsewhere; `find_path` deliberately stays inside the resolved subgraph because returning a heuristic path would erode trust in the result.
+- We return one shortest path, not all shortest paths.
+- The default `max_depth = 8` covers most realistic call stacks. Higher values let you trace deeper but cost wall-clock on large repos.
 
 ### find_dead_code
 
