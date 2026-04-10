@@ -9,13 +9,19 @@ A symbol is flagged as *dead* only when ALL of the following are true:
   - no call_edge anywhere references the name as the last segment of its
     callee_name,
   - AND the name does not appear as an identifier OR a string literal
-    anywhere in the repo's source files.
+    anywhere in the repo's source files (counting same-file uses too —
+    a definition line gives 1 mention, so ≥ 2 mentions in the own file
+    means there is at least one real use).
 
 The string-literal check is what catches dynamic dispatch through registry
 dicts: `tools["bash_exec"] = bash_exec` keeps `bash_exec` alive even when
 no static call_edge ever resolves to it. That single check eliminates the
 bulk of false positives that come from decorator-registered handlers,
-plugin systems, and CLI command dispatchers.
+plugin systems, and CLI command dispatchers. The same-file branch catches
+the related case where a helper is registered in a dict literal *inside
+its own module* — e.g. `_KIND_COLOR = {"function": cyan}` next to
+`def cyan(...)` in the same file. Without that branch, those helpers were
+flagged as dead even though they were referenced one line below.
 
 False negatives (missed dead code) are acceptable; false positives (live
 code labeled dead) are NOT — the user has to be able to trust this list.
@@ -30,6 +36,7 @@ Remaining limitations:
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,20 +70,21 @@ class DeadCodeReport:
 _ENTRYPOINT_NAMES = {"main", "run", "cli", "app"}
 
 
-def _build_per_file_tokens(conn) -> dict[int, set[str]]:
-    """Map ``file_id → set of identifier-like tokens`` (string literals
-    included, since the regex matches anywhere in the file). Used to
-    answer "is this name mentioned in any OTHER file in the repo".
+def _build_per_file_token_counts(conn) -> dict[int, Counter]:
+    """Map ``file_id → Counter of identifier-like tokens`` (string literals
+    included, since the regex matches anywhere in the file). Counts (not
+    just presence) so we can distinguish "the symbol's own definition line"
+    from "the symbol's def line + a real use".
     """
-    out: dict[int, set[str]] = {}
+    out: dict[int, Counter] = {}
     rows = conn.execute("SELECT file_id, abs_path FROM file").fetchall()
     for r in rows:
         try:
             text = Path(r["abs_path"]).read_text(encoding="utf-8", errors="replace")
         except OSError:
-            out[int(r["file_id"])] = set()
+            out[int(r["file_id"])] = Counter()
             continue
-        out[int(r["file_id"])] = set(_TOKEN_RE.findall(text))
+        out[int(r["file_id"])] = Counter(_TOKEN_RE.findall(text))
     return out
 
 
@@ -98,7 +106,7 @@ def find_dead_code(repo_path: Path) -> DeadCodeReport:
              WHERE s.kind IN ('function', 'method', 'class')
             """
         ).fetchall()
-        per_file_tokens: dict[int, set[str]] | None = None
+        per_file_token_counts: dict[int, Counter] | None = None
 
         for r in rows:
             rep.total_checked += 1
@@ -115,7 +123,11 @@ def find_dead_code(repo_path: Path) -> DeadCodeReport:
             if r["kind"] == "function" and name in _ENTRYPOINT_NAMES:
                 rep.excluded_entrypoint += 1
                 continue
-            if name.startswith("test_") or name.startswith("Test"):
+            if (
+                name.startswith("test_")
+                or name.startswith("Test")
+                or name.endswith("Tests")  # `<Subject>Tests` unittest convention
+            ):
                 rep.excluded_test += 1
                 continue
             # Textual call search: any callee that ends in this name?
@@ -132,15 +144,22 @@ def find_dead_code(repo_path: Path) -> DeadCodeReport:
                 continue
             # Final check: does the name appear in any OTHER file's source as
             # an identifier OR a string literal? Catches dispatch-dict
-            # registrations like `tools["bash_exec"] = bash_exec`.
-            if per_file_tokens is None:
-                per_file_tokens = _build_per_file_tokens(conn)
+            # registrations like `tools["bash_exec"] = bash_exec`. We also
+            # check the OWN file for ≥ 2 mentions: the definition line gives
+            # exactly one mention, so a count of 2+ proves there is at least
+            # one real use in the same module (e.g. a helper registered in a
+            # dict literal a few lines below its `def`).
+            if per_file_token_counts is None:
+                per_file_token_counts = _build_per_file_token_counts(conn)
             referenced_externally = any(
-                name in tokens
-                for fid, tokens in per_file_tokens.items()
+                counts.get(name, 0) > 0
+                for fid, counts in per_file_token_counts.items()
                 if fid != own_file_id
             )
-            if referenced_externally:
+            referenced_in_own_file = (
+                per_file_token_counts.get(own_file_id, Counter()).get(name, 0) >= 2
+            )
+            if referenced_externally or referenced_in_own_file:
                 rep.excluded_textual += 1
                 continue
             rep.dead.append(
