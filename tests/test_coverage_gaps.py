@@ -244,5 +244,78 @@ class TestClassFixtureTests(unittest.TestCase):
         self.assertNotIn("module.production_func", gap_qnames)
 
 
+def _make_subject_tests_suffix_repo() -> tuple[Path, Path]:
+    """Same shape as the TestModule fixture but using the `<Subject>Tests`
+    suffix convention (e.g. `WidgetParserTests(unittest.TestCase)`) instead
+    of the `Test*` prefix. The whole jarvis-graph-lite test suite uses this
+    convention; before v0.9.2, methods on these classes were not recognised
+    as test entry points so all production code reachable only via them was
+    falsely flagged as a coverage gap."""
+    tmp_root = Path(tempfile.mkdtemp(prefix="jgl_cov_suffix_"))
+    repo = tmp_root / "tcs_repo"
+    repo.mkdir()
+    (repo / "widget.py").write_text(
+        "def widget_helper() -> int:\n"
+        "    return 11\n"
+        "\n"
+        "def widget_production() -> int:\n"
+        "    return widget_helper() + 2\n",
+        encoding="utf-8",
+    )
+    tests_dir = repo / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tests_dir / "test_widget.py").write_text(
+        "import unittest\n"
+        "from widget import widget_helper, widget_production\n"
+        "\n"
+        "class WidgetParserTests(unittest.TestCase):\n"
+        "    def setUp(self) -> None:\n"
+        "        self.h = widget_helper()\n"
+        "\n"
+        "    def test_production(self) -> None:\n"
+        "        self.assertEqual(widget_production(), 13)\n",
+        encoding="utf-8",
+    )
+    index_repo(repo, full=True)
+    return tmp_root, repo
+
+
+class SubjectTestsSuffixCoverageTests(unittest.TestCase):
+    """Regression: methods on `<Subject>Tests` unittest classes (suffix
+    convention) must be recognised as test entry points so the production
+    code they reach isn't flagged as a coverage gap. Caught while dogfooding
+    on jarvis-graph-lite itself, where every test class uses the suffix
+    convention and `summarize` was being flagged even after a test was
+    written for it."""
+
+    def setUp(self) -> None:
+        self.tmp_root, self.repo = _make_subject_tests_suffix_repo()
+
+    def tearDown(self) -> None:
+        cleanup(self.tmp_root)
+
+    def test_subject_tests_methods_are_entry_points(self) -> None:
+        rep = find_coverage_gaps(self.repo, min_complexity=1)
+        # Two methods on WidgetParserTests: setUp + test_production.
+        self.assertEqual(rep.test_entry_points, 2)
+
+    def test_production_reached_through_suffix_class(self) -> None:
+        rep = find_coverage_gaps(self.repo, min_complexity=1)
+        gap_qnames = {g.qualified_name for g in rep.gaps}
+        self.assertNotIn(
+            "widget.widget_production",
+            gap_qnames,
+            "widget_production is called from a method on WidgetParserTests "
+            "and must be reached",
+        )
+        self.assertNotIn(
+            "widget.widget_helper",
+            gap_qnames,
+            "widget_helper is called from setUp on WidgetParserTests and "
+            "must be reached",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

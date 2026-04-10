@@ -84,9 +84,11 @@ def _collect_test_entry_points(conn) -> tuple[set[int], set[int]]:
 
     A test entry point is any function/method in a test file whose name
     starts with `test_`, OR a method on a class whose name starts with
-    `Test`. We also count `setUp`/`tearDown` because they pull dependencies
-    into the reachable set even though they don't have `test_` prefix —
-    skipping them would falsely flag fixtures as coverage gaps.
+    `Test` OR ends with `Tests` (the `<Subject>Tests` suffix convention,
+    e.g. `RepoSummaryTests(unittest.TestCase)`). We also count
+    `setUp`/`tearDown` because they pull dependencies into the reachable
+    set even though they don't have `test_` prefix — skipping them would
+    falsely flag fixtures as coverage gaps.
     """
     test_file_ids: set[int] = set()
     file_rows = conn.execute("SELECT file_id, rel_path FROM file").fetchall()
@@ -115,10 +117,12 @@ def _collect_test_entry_points(conn) -> tuple[set[int], set[int]]:
         parent = r["parent_qname"] or ""
         if name.startswith("test_"):
             entry_ids.add(int(r["symbol_id"]))
-        elif kind == "method" and parent.rsplit(".", 1)[-1].startswith("Test"):
-            # methods on TestFoo classes — including setUp/tearDown — pull
-            # fixtures into the reachable set
-            entry_ids.add(int(r["symbol_id"]))
+        elif kind == "method":
+            cls = parent.rsplit(".", 1)[-1]
+            if cls.startswith("Test") or cls.endswith("Tests"):
+                # methods on TestFoo / FooTests classes — including
+                # setUp/tearDown — pull fixtures into the reachable set
+                entry_ids.add(int(r["symbol_id"]))
     return test_file_ids, entry_ids
 
 
