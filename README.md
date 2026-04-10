@@ -16,7 +16,7 @@ It answers eleven questions about a repo:
 8. **`find_complexity`** — *which functions are too tangled?* (McCabe cyclomatic, low → extreme buckets)
 9. **`find_long_functions`** — *which functions are over the line-count threshold?*
 10. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
-11. **`health_report`** — *one Markdown file aggregating all of the above.*
+11. **`health_report`** — *one Markdown file aggregating all of the above. With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section.*
 
 Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
 
@@ -73,6 +73,11 @@ python -m jarvis_graph find_god_files      C:\JARVIS --limit 15
 
 :: 5. one report to rule them all
 python -m jarvis_graph health_report       C:\JARVIS --out HEALTH.md
+
+:: 6. take a snapshot today, diff it tomorrow
+python -m jarvis_graph health_report C:\JARVIS --json > snap.json
+:: ... time passes, code changes ...
+python -m jarvis_graph health_report C:\JARVIS --baseline snap.json --out HEALTH.md
 ```
 
 Every command accepts `--json` for machine-readable output.
@@ -140,7 +145,7 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   find_complexity     <repo> [--threshold N] [--limit N] [--json]
   find_long_functions <repo> [--threshold N] [--limit N] [--json]
   find_god_files      <repo> [--limit N]               [--json]
-  health_report       <repo> [--out FILE] [--top-n N]  [--json]
+  health_report       <repo> [--out FILE] [--top-n N] [--baseline FILE]  [--json]
 ```
 
 `<symbol-or-file>` resolves in this order: exact qualified name → qualified-name suffix (for dotted `Class.method`) → parent-qname suffix (for `Class.method` where `Class` is in another module) → exact symbol name → file path substring.

@@ -36,6 +36,7 @@ src/jarvis_graph/
   long_functions_engine.py # find_long_functions (line_count over threshold)
   god_files_engine.py      # find_god_files (composite of symbols × LOC × fan-in)
   health_report_engine.py  # health_report (Markdown aggregator over all engines)
+  drift_engine.py          # compute_drift / render_drift_markdown (v0.5)
   utils.py                 # iter_python_files, to_module_path, repo_data_dir, ...
   logging_utils.py         # one-line append-only operations log
 ```
@@ -180,6 +181,19 @@ Composite score in a single SQL with a LEFT JOIN and a fan-in subquery counting 
 ### health_report
 
 Calls every other engine in turn (complexity, long functions, god files, dead code, unused imports, circular deps), assembles their reports into a 7-section Markdown document, and computes a "summary" payload for JSON consumers (so other tools don't need to parse the Markdown). Top-N defaults to 15. Output goes to a file via `--out` or to stdout.
+
+When `--baseline FILE` is supplied, the report loads a previous JSON snapshot and adds a section 8 ("Drift since baseline") via `drift_engine`. The summary payload also gains a `drift` key with `regression_count`, `improvement_count`, and structured per-metric details. The baseline loader accepts both shapes the CLI emits: the full `{"repo_path": ..., "summary": {...}}` envelope and the bare summary payload.
+
+### drift_engine
+
+A pure function pair (`compute_drift` + `render_drift_markdown`) that compares two `health_report` summary snapshots. It does not touch the database — that keeps it deterministic and trivially testable from JSON.
+
+Two flavours of drift:
+
+- **Scalar drift** — numeric metrics (`hotspot_count`, `dead_code.count`, `cycles.count`, resolution percentages, …) compared as `(baseline, current, delta)`. Each metric is tagged `worsened` (delta moved in the bad direction), `improved` (moved in the good direction), `unchanged`, or `neutral` (informational totals like file/symbol counts where no direction is meaningful). The direction comes from a small per-metric table inside the engine, not from inference.
+- **Set drift** — ranked lists (top hotspots, top god files, dead-code symbols, cycles) compared as sets keyed by a stable id (`qualified_name` for symbols, `rel_path` for files, sorted member tuple for cycles). The result is `regressions` (newly in the list), `improvements` (left the list), and `unchanged` (count of overlap). The engine deliberately skips a set diff if either side is missing the path entirely — that prevents an older baseline from a tool version that didn't track these lists from showing every current entry as a regression.
+
+To make set drift work, `health_report` had to enrich its summary payload to include the actual top-N entries with stable ids (not just counts). The old `dead_code_count` / `unused_import_count` / `cycle_count` scalar fields are still emitted as back-compat aliases.
 
 ### detect_changes
 

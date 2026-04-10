@@ -3,7 +3,8 @@
 Calls the existing engines and stitches their results into one document, so
 the user gets a complete "state of the repo" view from a single CLI invocation.
 
-The report has six fixed sections, in this order:
+The report has seven fixed sections plus an optional drift section when a
+baseline is supplied:
   1. Headline numbers (files, symbols, calls, resolution rate)
   2. Hotspots (top complexity)
   3. Long functions (top by line count)
@@ -11,6 +12,7 @@ The report has six fixed sections, in this order:
   5. Dead code (top dead candidates)
   6. Unused imports (top files with most unused imports)
   7. Circular dependencies (full list)
+  8. Drift since baseline (only when --baseline is provided)
 """
 
 from __future__ import annotations
@@ -18,11 +20,13 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from jarvis_graph.circular_deps_engine import find_circular_deps
 from jarvis_graph.complexity_engine import find_complexity
 from jarvis_graph.db import connect
 from jarvis_graph.dead_code_engine import find_dead_code
+from jarvis_graph.drift_engine import compute_drift, render_drift_markdown
 from jarvis_graph.god_files_engine import find_god_files
 from jarvis_graph.long_functions_engine import find_long_functions
 from jarvis_graph.unused_imports_engine import find_unused_imports
@@ -99,6 +103,7 @@ def health_report(
     complexity_threshold: int = 10,
     long_threshold: int = 50,
     top_n: int = 15,
+    baseline: dict | None = None,
 ) -> HealthReport:
     repo_path = repo_path.resolve()
     headline = _headline_stats(repo_path)
@@ -245,29 +250,115 @@ def health_report(
         lines.append("_No cycles found._")
     lines.append("")
 
+    summary: dict[str, Any] = {
+        "headline": headline,
+        "complexity": {
+            "total": cx.total_callables,
+            "average": cx.average,
+            "high": cx.high,
+            "extreme": cx.extreme,
+            "hotspot_count": len(cx.hotspots),
+            "hotspots": [
+                {
+                    "qname": h.qualified_name,
+                    "rel_path": h.rel_path,
+                    "lineno": h.lineno,
+                    "complexity": h.complexity,
+                    "line_count": h.line_count,
+                }
+                for h in cx.hotspots
+            ],
+        },
+        "long_functions": {
+            "total": lf.total_callables,
+            "over_threshold": lf.over_threshold,
+            "average_lines": lf.average,
+            "functions": [
+                {
+                    "qname": fn.qualified_name,
+                    "rel_path": fn.rel_path,
+                    "lineno": fn.lineno,
+                    "line_count": fn.line_count,
+                    "complexity": fn.complexity,
+                }
+                for fn in lf.functions
+            ],
+        },
+        "god_files": [
+            {
+                "path": g.rel_path,
+                "score": g.score,
+                "symbols": g.symbol_count,
+                "loc": g.total_loc,
+                "fan_in": g.fan_in,
+            }
+            for g in god.files
+        ],
+        "dead_code": {
+            "count": len(dead.dead),
+            "symbols": [
+                {
+                    "qname": d.qualified_name,
+                    "rel_path": d.rel_path,
+                    "lineno": d.lineno,
+                    "kind": d.kind,
+                }
+                for d in dead.dead[:top_n]
+            ],
+        },
+        "unused_imports": {
+            "count": len(unused.unused),
+            "top_files": [
+                {"path": p, "count": n} for p, n in top_unused_files
+            ],
+        },
+        "cycles": {
+            "count": len(cycles.cycles),
+            "groups": [
+                {"size": c.size, "files": list(c.files)}
+                for c in cycles.cycles
+            ],
+        },
+        # Back-compat scalar aliases (older v0.3 consumers).
+        "dead_code_count": len(dead.dead),
+        "unused_import_count": len(unused.unused),
+        "cycle_count": len(cycles.cycles),
+    }
+
+    drift_md = ""
+    drift = compute_drift(baseline, summary)
+    if drift.has_baseline:
+        drift_md = render_drift_markdown(drift)
+        if drift_md:
+            lines.append(drift_md)
+        summary["drift"] = {
+            "regression_count": drift.regression_count,
+            "improvement_count": drift.improvement_count,
+            "scalars": [
+                {
+                    "name": s.name,
+                    "baseline": s.baseline,
+                    "current": s.current,
+                    "delta": s.delta,
+                    "direction": s.direction,
+                }
+                for s in drift.scalars
+            ],
+            "sets": [
+                {
+                    "name": sd.name,
+                    "regressions": sd.regressions,
+                    "improvements": sd.improvements,
+                    "unchanged": sd.unchanged,
+                    "baseline_size": sd.baseline_size,
+                    "current_size": sd.current_size,
+                }
+                for sd in drift.sets
+            ],
+        }
+
     return HealthReport(
         repo_path=str(repo_path),
         markdown="\n".join(lines),
-        summary={
-            "headline": headline,
-            "complexity": {
-                "total": cx.total_callables,
-                "average": cx.average,
-                "high": cx.high,
-                "extreme": cx.extreme,
-                "hotspot_count": len(cx.hotspots),
-            },
-            "long_functions": {
-                "total": lf.total_callables,
-                "over_threshold": lf.over_threshold,
-                "average_lines": lf.average,
-            },
-            "god_files": [
-                {"path": g.rel_path, "score": g.score, "symbols": g.symbol_count}
-                for g in god.files[:5]
-            ],
-            "dead_code_count": len(dead.dead),
-            "unused_import_count": len(unused.unused),
-            "cycle_count": len(cycles.cycles),
-        },
+        summary=summary,
     )

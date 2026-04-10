@@ -24,6 +24,10 @@ Things that were considered and **explicitly left out**, with the trigger that w
 - **Gitignore-aware walker** (`utils.iter_python_files` + `gitignore.GitignoreStack`). Recursive descent with layered matchers; supports `**`, anchored vs unanchored, dir-only, negation, character classes. Cut JARVIS from 610 → 407 visible files by excluding `workspace/generated_projects/`.
 - **Parallel parsing** (`parallel.parse_in_parallel`). `ProcessPoolExecutor` fan-out with a `min(8, cpu-1)` worker cap, a 50-file activation threshold, and a sequential safety net for any worker drops. Cut JARVIS full reindex from 5.04 s → 3.83 s (~24%).
 
+## Promoted out of this file in v0.5
+
+- **Baseline drift on `health_report`** (`drift_engine.compute_drift`). Loads a previous `health_report --json` snapshot via `--baseline FILE` and renders a "Drift since baseline" section showing scalar drift (worsened / improved / neutral per metric) and set drift (newly-entered and newly-left lists for hotspots, dead code, cycles, …). The summary payload was enriched to carry the top-N lists with stable ids so set diff is keyed by `qualified_name` / `rel_path`. Skips set diff entirely when the baseline is missing a list — protects against false-positive regressions when the baseline came from an older tool version.
+
 ## Still deferred
 
 | Feature | Why deferred | Trigger to add |

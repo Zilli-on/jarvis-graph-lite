@@ -1,5 +1,5 @@
 """jarvis-graph CLI: index / query / context / impact / detect_changes / summary
-plus the v0.2 + v0.3 health-check engines.
+plus the v0.2 + v0.3 health-check engines and the v0.5 baseline drift.
 
 Usage:
     jarvis-graph index <repo>            # incremental
@@ -15,7 +15,7 @@ Usage:
     jarvis-graph find_complexity      <repo> [--threshold N] [--limit N]
     jarvis-graph find_long_functions  <repo> [--threshold N] [--limit N]
     jarvis-graph find_god_files       <repo> [--limit N]
-    jarvis-graph health_report        <repo> [--out FILE]
+    jarvis-graph health_report        <repo> [--out FILE] [--baseline FILE]
 
 All output is plain text by default; pass --json to any subcommand to get a
 structured payload (handy for scripts and other agents). ANSI colour is on
@@ -441,13 +441,40 @@ def _cmd_find_god_files(args) -> int:
     return 0
 
 
+def _load_baseline_summary(path: Path) -> dict | None:
+    """Load a baseline JSON snapshot.
+
+    Accepts both shapes that the CLI emits:
+      - the full `health_report --json` output: `{"repo_path": ..., "summary": {...}}`
+      - the bare summary payload itself
+    Returns None if the file is empty/missing the expected structure.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        print(f"error: cannot read baseline {path}: {exc}", file=sys.stderr)
+        return None
+    if isinstance(raw, dict) and "summary" in raw and isinstance(raw["summary"], dict):
+        return raw["summary"]
+    if isinstance(raw, dict) and "headline" in raw:
+        return raw
+    print(f"error: baseline {path} does not look like a health_report snapshot", file=sys.stderr)
+    return None
+
+
 def _cmd_health_report(args) -> int:
     repo = Path(args.repo)
+    baseline_summary: dict | None = None
+    if args.baseline:
+        baseline_summary = _load_baseline_summary(Path(args.baseline))
+        if baseline_summary is None:
+            return 2
     rep = run_health_report(
         repo,
         complexity_threshold=args.complexity_threshold,
         long_threshold=args.long_threshold,
         top_n=args.top_n,
+        baseline=baseline_summary,
     )
     if args.json:
         _print_json({"repo_path": rep.repo_path, "summary": rep.summary})
@@ -461,10 +488,17 @@ def _cmd_health_report(args) -> int:
         print(dim(
             f"  files={s['headline']['files']} "
             f"complexity_hotspots={s['complexity']['hotspot_count']} "
-            f"dead_code={s['dead_code_count']} "
-            f"unused_imports={s['unused_import_count']} "
-            f"cycles={s['cycle_count']}"
+            f"dead_code={s['dead_code']['count']} "
+            f"unused_imports={s['unused_imports']['count']} "
+            f"cycles={s['cycles']['count']}"
         ))
+        if "drift" in s:
+            d = s["drift"]
+            paint = red if d["regression_count"] > 0 else green
+            print(dim(
+                f"  drift: {paint(str(d['regression_count']) + ' regression(s)')}, "
+                f"{green(str(d['improvement_count']) + ' improvement(s)')}"
+            ))
         return 0
     print(rep.markdown)
     return 0
@@ -621,6 +655,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="write the markdown to this path instead of stdout",
+    )
+    phr.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help="load a previous --json snapshot from FILE and add a drift section",
     )
     phr.add_argument("--json", action="store_true")
     phr.set_defaults(func=_cmd_health_report)
