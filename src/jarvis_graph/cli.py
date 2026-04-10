@@ -129,6 +129,7 @@ from jarvis_graph.test_skeleton_engine import (
     generate_test_skeleton,
     write_skeleton,
 )
+from jarvis_graph.todo_comments_engine import find_todo_comments
 from jarvis_graph.unused_imports_engine import find_unused_imports
 
 
@@ -616,6 +617,70 @@ def _cmd_refactor_priority(args) -> int:
     return 0
 
 
+_TODO_TAG_COLOR = {
+    "bug": red,
+    "hack": red,
+    "fixme": yellow,
+    "todo": cyan,
+    "xxx": magenta,
+}
+_TODO_BUCKET_COLOR = {
+    "critical": red,
+    "high": red,
+    "medium": yellow,
+    "low": green,
+}
+
+
+def _cmd_find_todo_comments(args) -> int:
+    repo = Path(args.repo)
+    rep = find_todo_comments(
+        repo,
+        limit=args.limit,
+        min_risk=args.min_risk,
+        include_tests=args.include_tests,
+    )
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_todo_comments: {repo.resolve()}"))
+    by_tag = " ".join(f"{k}={v}" for k, v in sorted(rep.by_tag.items()))
+    by_bucket = " ".join(f"{k}={v}" for k, v in sorted(rep.by_bucket.items()))
+    print(
+        dim(
+            f"  scanned={rep.total_files_scanned}  "
+            f"files_with_todos={rep.files_with_todos}  "
+            f"total={rep.total_hits}  "
+            f"tags[{by_tag}]  buckets[{by_bucket}]"
+        )
+    )
+    paint = red if rep.hits else green
+    print(f"  shown: {paint(str(len(rep.hits)))}")
+    if not rep.hits:
+        return 0
+    print()
+    for h in rep.hits:
+        tag_paint = _TODO_TAG_COLOR.get(h.tag, dim)
+        bucket_paint = _TODO_BUCKET_COLOR.get(h.risk_bucket, dim)
+        loc = f"{h.rel_path}:{h.lineno}"
+        enclosing = h.enclosing_qname or "<module>"
+        text = h.text
+        if len(text) > 100:
+            text = text[:97] + "..."
+        print(
+            f"  [{bucket_paint(f'{h.risk:>5.1f}')}] "
+            f"{tag_paint(h.tag.upper().ljust(5))}  "
+            f"{_path(loc)}"
+        )
+        print(
+            f"         in {_kind(h.enclosing_kind)} "
+            f"{bold(enclosing)}  "
+            f"(cplx={h.complexity}, loc={h.line_count})"
+        )
+        print(f"         {dim(text)}")
+    return 0
+
+
 def _load_baseline_summary(path: Path) -> dict | None:
     """Load a baseline JSON snapshot.
 
@@ -907,6 +972,31 @@ def _build_parser() -> argparse.ArgumentParser:
     pfo.add_argument("--limit", type=int, default=20)
     pfo.add_argument("--json", action="store_true")
     pfo.set_defaults(func=_cmd_find_high_fan_out)
+
+    ptc = sub.add_parser(
+        "find_todo_comments",
+        help="Rank TODO/FIXME/XXX/HACK/BUG comments by composite risk (tag + complexity + LOC of enclosing symbol)",
+    )
+    ptc.add_argument("repo")
+    ptc.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="cap on returned hits after sorting (default 50)",
+    )
+    ptc.add_argument(
+        "--min-risk",
+        type=float,
+        default=0.0,
+        help="drop hits with risk below this threshold (default 0.0 = show everything)",
+    )
+    ptc.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="include TODOs inside test files (default: skipped, they're usually dev scratchpad)",
+    )
+    ptc.add_argument("--json", action="store_true")
+    ptc.set_defaults(func=_cmd_find_todo_comments)
 
     prp = sub.add_parser(
         "refactor_priority",

@@ -38,6 +38,9 @@ src/jarvis_graph/
   long_functions_engine.py # find_long_functions (line_count over threshold)
   god_files_engine.py      # find_god_files (composite of symbols × LOC × fan-in)
   fan_out_engine.py        # find_high_fan_out (distinct in-repo imports per file)
+  refactor_priority_engine.py  # refactor_priority meta-engine (cross-signal score) — v0.11
+  todo_comments_engine.py  # find_todo_comments (tokenize + enclosing-symbol cplx) — v0.12
+  test_skeleton_engine.py  # generate_test_skeleton (closes the find→fix loop)
   health_report_engine.py  # health_report (Markdown aggregator over all engines)
   drift_engine.py          # compute_drift / render_drift_markdown (v0.5)
   utils.py                 # iter_python_files, to_module_path, repo_data_dir, ...
@@ -222,6 +225,39 @@ END) AS fan_out
 ```
 
 The `DISTINCT` collapses duplicate imports of the same file (e.g. `from x import a; from x import b` should still count as one fan-out edge), and the self-comparison drops file's-own-resolved-imports. Two side-counters travel along: `imports_total` (every recorded edge, incl. unresolved stdlib) and `imports_resolved` (subset that resolved to a file id). `fan_out_pct = fan_out / total_files`, so risk buckets generalise across repos of any size (`high` = ≥20% or ≥30 absolute, `medium` = ≥8% or ≥12, else `low`).
+
+### find_todo_comments
+
+Every repo has TODO/FIXME/HACK/BUG comments. `grep -rn TODO .` is the standard answer, but grep can't tell you *which* TODOs actually matter. A FIXME in a 2-line helper is a yak-shave; a FIXME inside a 50-line cyclomatic-20 function is a time bomb. `find_todo_comments` ranks them by composite risk:
+
+```
+risk = tag_weight + complexity + (line_count * 0.1)
+```
+
+Where `tag_weight` is `BUG=HACK=4`, `FIXME=3`, `TODO=XXX=2`, and `complexity` + `line_count` come from the enclosing function/method/class. Buckets: `critical >= 20`, `high >= 10`, `medium >= 5`, `low` otherwise. Additive scoring is deliberately simple so every number is explainable at a glance — no neural ranker, no magic constants beyond those weights.
+
+Two implementation details matter:
+
+1. **Comment extraction via stdlib `tokenize`**, not a regex on raw text. A regex can't distinguish `# TODO: fix` from `x = "# TODO: fix"`, and it can't keep TODOs inside docstrings out of the results. `tokenize` walks the actual token stream so only true `COMMENT` tokens count — string literals (including f-strings, triple-quoted docstrings, and any `# TODO` embedded inside a string) are skipped for free. Files that fail to tokenize are returned as empty (the indexer has already flagged them via `parse_error`).
+
+2. **Innermost enclosing symbol via one SQL query**, no recursive CTE:
+
+   ```sql
+   SELECT qualified_name, kind, complexity, line_count
+     FROM symbol
+    WHERE file_id = ?
+      AND kind IN ('function', 'method', 'class')
+      AND lineno <= ?
+      AND (end_lineno IS NULL OR end_lineno >= ?)
+    ORDER BY lineno DESC
+    LIMIT 1
+   ```
+
+   The `ORDER BY lineno DESC LIMIT 1` naturally picks the innermost nest level — of all the symbols that contain the target line, the one with the highest `lineno` is the deepest in the nesting tree. Module-level comments fall through to a synthetic "module" enclosure with complexity 0 and line_count 0, so the score reduces to just the tag weight (always `low`).
+
+Test files are excluded by default (they're full of dev scratchpad that isn't production risk) via the same `_is_test_path` helper as `coverage_gap_engine` and `refactor_priority_engine`. Pass `include_tests=True` to override. `min_risk` filters before the sort so the sort cost stays bounded on repos with thousands of scattered TODOs.
+
+Validation on JARVIS: 422 files scanned, **4** real TODOs found. The tokenize accuracy is the whole point — most repos have hundreds of string-embedded "TODO" false positives that a naive regex would surface. The top hit (HACK in `lyrc-local/amv_engine.beat_match_edit`, cplx=156, lines=474, risk=207.4, bucket `critical`) cross-matches `refactor_priority`'s #1 entry — two independent signals converging on the same hotspot is a strong correctness hint.
 
 ### health_report
 
