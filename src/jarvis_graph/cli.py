@@ -122,6 +122,7 @@ from jarvis_graph.impact_engine import impact as run_impact
 from jarvis_graph.indexer import index_repo
 from jarvis_graph.long_functions_engine import find_long_functions
 from jarvis_graph.query_engine import query as run_query
+from jarvis_graph.refactor_priority_engine import find_refactor_priority
 from jarvis_graph.repo_summary import summarize
 from jarvis_graph.test_skeleton_engine import (
     SkeletonError,
@@ -574,6 +575,47 @@ def _cmd_find_high_fan_out(args) -> int:
     return 0
 
 
+def _cmd_refactor_priority(args) -> int:
+    repo = Path(args.repo)
+    rep = find_refactor_priority(
+        repo,
+        min_priority=args.min_priority,
+        limit=args.limit,
+        include_classes=args.include_classes,
+    )
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"refactor_priority: {repo.resolve()}"))
+    print(dim(
+        f"  evaluated: {rep.total_evaluated}  "
+        f"skipped_test: {rep.skipped_test}  "
+        f"skipped_trivial: {rep.skipped_trivial}  "
+        f"threshold: {rep.threshold}"
+    ))
+    if rep.note:
+        print(dim(f"  note: {rep.note}"))
+    paint = red if rep.candidates else green
+    print(f"  candidates: {paint(str(len(rep.candidates)))}")
+    if not rep.candidates:
+        return 0
+    print()
+    print(dim("  rank  score   cplx  lines  callers  symbol"))
+    for i, c in enumerate(rep.candidates, 1):
+        tags = ", ".join(c.reasons)
+        untested_tag = red("UNTEST") if c.is_untested else green(" OK ")
+        print(
+            f"  {i:>4}  {c.priority:>5.1f}  "
+            f"{c.complexity:>4}  {c.line_count:>5}  "
+            f"{c.caller_count:>7}  "
+            f"{untested_tag}  "
+            f"{c.qualified_name}  "
+            f"{dim('[' + _path(c.rel_path) + ':' + str(c.lineno) + ']')}"
+        )
+        print(f"         {dim(tags)}")
+    return 0
+
+
 def _load_baseline_summary(path: Path) -> dict | None:
     """Load a baseline JSON snapshot.
 
@@ -865,6 +907,26 @@ def _build_parser() -> argparse.ArgumentParser:
     pfo.add_argument("--limit", type=int, default=20)
     pfo.add_argument("--json", action="store_true")
     pfo.set_defaults(func=_cmd_find_high_fan_out)
+
+    prp = sub.add_parser(
+        "refactor_priority",
+        help="Rank functions by a composite score combining complexity, length, coverage, and caller count",
+    )
+    prp.add_argument("repo")
+    prp.add_argument(
+        "--min-priority",
+        type=float,
+        default=50.0,
+        help="only return rows with composite score >= this (default 50)",
+    )
+    prp.add_argument("--limit", type=int, default=30)
+    prp.add_argument(
+        "--include-classes",
+        action="store_true",
+        help="also score `kind=class` symbols (classes have no complexity in this index — off by default)",
+    )
+    prp.add_argument("--json", action="store_true")
+    prp.set_defaults(func=_cmd_refactor_priority)
 
     phr = sub.add_parser("health_report", help="Generate a Markdown report combining every health signal")
     phr.add_argument("repo")

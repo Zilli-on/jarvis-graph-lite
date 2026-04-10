@@ -6,7 +6,6 @@ fan-out counts are deterministic regardless of the rest of the suite.
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 import unittest
 from pathlib import Path

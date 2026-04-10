@@ -6,11 +6,7 @@ import unittest
 
 from conftest import cleanup, prepare_extended_repo  # noqa: F401 (path setup)
 
-from jarvis_graph.drift_engine import (
-    DriftReport,
-    compute_drift,
-    render_drift_markdown,
-)
+from jarvis_graph.drift_engine import compute_drift, render_drift_markdown
 
 
 def _baseline_summary() -> dict:

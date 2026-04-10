@@ -4,7 +4,7 @@ A tiny **local** code-intelligence index for Python repos.
 Stdlib only. No embeddings. No daemons. No external services.
 Runs on Win10, Python 3.11, in seconds, on a 9-year-old i5 with 8 GB RAM.
 
-It answers fifteen questions about a repo:
+It answers sixteen questions about a repo:
 
 1. **`query`** — *where does this concept live?*  (with `--and` for strict AND across tokens, plus a recency boost)
 2. **`context`** — *what is this symbol or file's role?*
@@ -19,8 +19,9 @@ It answers fifteen questions about a repo:
 11. **`find_long_functions`** — *which functions are over the line-count threshold?*
 12. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
 13. **`find_high_fan_out`** — *which files import too much of the rest of the repo?* (the symmetric counterpart to `find_god_files` — high fan-out flags client hubs that break first when their many dependencies move)
-14. **`health_report`** — *one Markdown file aggregating all of the above (10 sections, including a `Coverage gaps` block driven by `find_coverage_gaps`). With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section that tracks `coverage_pct` and the coverage-gap set diff alongside every other metric.*
-15. **`generate_test_skeleton`** — *given a symbol qname (the kind of thing `find_coverage_gaps` returns), emit a unittest.TestCase skeleton with the right import, the `<Subject>Tests` suffix-convention class, one `test_*_smoke` method per public method, and `raise NotImplementedError` in every body so the stub fails until you fill it in. Closes the loop from "find untested code" to "start writing the test".*
+14. **`refactor_priority`** — *given ALL the other signals at once, what should I fix FIRST?* (meta-engine: composite score of complexity + size + test coverage + caller count, with a `weight_factor` that suppresses trivial-but-popular helpers so only non-trivial risky-to-touch code surfaces. Test files, `__init__`, private symbols and trivial helpers (cplx < 3 AND < 20 lines) are pre-filtered out of the ranking.)
+15. **`health_report`** — *one Markdown file aggregating all of the above (10 sections, including a `Coverage gaps` block driven by `find_coverage_gaps`). With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section that tracks `coverage_pct` and the coverage-gap set diff alongside every other metric.*
+16. **`generate_test_skeleton`** — *given a symbol qname (the kind of thing `find_coverage_gaps` returns), emit a unittest.TestCase skeleton with the right import, the `<Subject>Tests` suffix-convention class, one `test_*_smoke` method per public method, and `raise NotImplementedError` in every body so the stub fails until you fill it in. Closes the loop from "find untested code" to "start writing the test".*
 
 Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
 
@@ -77,6 +78,9 @@ python -m jarvis_graph find_complexity     C:\JARVIS --threshold 10
 python -m jarvis_graph find_long_functions C:\JARVIS --threshold 50
 python -m jarvis_graph find_god_files      C:\JARVIS --limit 15
 python -m jarvis_graph find_high_fan_out   C:\JARVIS --threshold 8
+
+:: 4b. ask the meta-engine: what should I refactor FIRST?
+python -m jarvis_graph refactor_priority   C:\JARVIS --min-priority 50 --limit 10
 
 :: 5. one report to rule them all
 python -m jarvis_graph health_report       C:\JARVIS --out HEALTH.md
@@ -159,6 +163,7 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   find_long_functions <repo> [--threshold N] [--limit N] [--json]
   find_god_files      <repo> [--limit N]               [--json]
   find_high_fan_out   <repo> [--threshold N] [--limit N] [--json]
+  refactor_priority   <repo> [--min-priority N] [--limit N] [--include-classes] [--json]
   health_report       <repo> [--out FILE] [--top-n N] [--fan-out-threshold N] [--coverage-min-complexity N] [--baseline FILE] [--save-baseline FILE]  [--json]
   generate_test_skeleton <repo> <symbol> [--out FILE] [--force] [--json]
 ```
