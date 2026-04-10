@@ -137,10 +137,38 @@ class ParseCommentTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result[0], "xxx")
 
-    def test_case_insensitive(self) -> None:
-        result = _parse_comment("# todo: lowercase form")
+    def test_lowercase_tag_not_matched(self) -> None:
+        """v0.12.4: lowercase `# todo` is NOT a tag — the convention is
+        ALL-CAPS, and matching lowercase generates false positives on
+        English prose like 'The bug was silent' or 'this is a hack'."""
+        self.assertIsNone(_parse_comment("# todo: lowercase form"))
+
+    def test_lowercase_bug_in_prose_not_matched(self) -> None:
+        """v0.12.4 regression guard: the phrase 'The bug was silent'
+        appeared in a v0.12.3 docstring and made find_todo_comments
+        flag the _resolve_calls function with a critical-risk score of
+        22.1. Must never match again."""
+        self.assertIsNone(
+            _parse_comment("# The bug was silent because the fallback ran")
+        )
+
+    def test_lowercase_hack_in_prose_not_matched(self) -> None:
+        """Same rule, different word — 'hack' in prose is not a HACK tag."""
+        self.assertIsNone(
+            _parse_comment("# this is a hack around the limitation")
+        )
+
+    def test_lowercase_fixme_in_prose_not_matched(self) -> None:
+        self.assertIsNone(
+            _parse_comment("# please fixme in the next release")
+        )
+
+    def test_uppercase_tag_still_matches_embedded(self) -> None:
+        """Positive guard: ALL-CAPS tags embedded in prose still match,
+        matching the existing `test_embedded_in_sentence` contract."""
+        result = _parse_comment("# The BUG manifests under load")
         assert result is not None
-        self.assertEqual(result[0], "todo")
+        self.assertEqual(result[0], "bug")
 
     def test_no_tag_returns_none(self) -> None:
         self.assertIsNone(_parse_comment("# just a regular comment"))

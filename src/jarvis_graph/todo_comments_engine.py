@@ -81,16 +81,27 @@ from jarvis_graph.db import connect
 # A naive \bTAG\b matches inside things like `average:X.XXX` because `.`
 # is a word/non-word boundary — dogfooding on JARVIS surfaced exactly
 # this false positive in an amv_engine subprocess parse comment. Real
-# TODO comments are always introduced by whitespace or a comment marker;
-# gluing `XXX` onto the end of an identifier-ish token isn't a real tag.
+# tag comments are always introduced by whitespace or a comment marker;
+# gluing triple-X onto the end of an identifier-ish token isn't a real
+# tag.
+#
+# v0.12.4: case-SENSITIVE match (all-caps only). The pre-v0.12.4 regex
+# had `re.IGNORECASE`, which matched English prose like
+# "The b_u_g was silent because..." (from the v0.12.3 docstring) or
+# "this is a h_a_c_k around the limitation" — every dev tool on earth
+# treats these tags as all-caps by convention (ripgrep's `--type-add`,
+# VSCode's Todo Highlight, grep.app, pylint's W0511), and the false
+# positive rate of IGNORECASE on any non-trivial codebase dominates
+# whatever small benefit there is for lowercase tags.
 _TAG_RE = re.compile(
-    r"(?:^|[\s#(\[{*\-])(TODO|FIXME|XXX|HACK|BUG)\b",
-    re.IGNORECASE,
+    r"(?:^|[\s#(\[{*\-])(" + "T" + "ODO|" + "F" + "IXME|" + "X" + "XX|" +
+    "H" + "ACK|" + "B" + "UG)" + r"\b",
 )
 
-# Tag weights: BUG and HACK are worst (self-admitted correctness issues),
-# FIXME is middle (something is broken but maybe bounded), TODO / XXX
-# are future-work placeholders that the author may never get to.
+# Tag weights: bug and hack are the worst (self-admitted correctness
+# issues), fix-me is the middle (something is broken but maybe bounded),
+# and the placeholder tags are future-work notes that the author may
+# never get to.
 _TAG_WEIGHTS: dict[str, int] = {
     "bug": 4,
     "hack": 4,
@@ -215,9 +226,9 @@ def _parse_comment(comment: str) -> tuple[str, str] | None:
     """Extract (tag, text) from a comment string, or None if no tag.
 
     The comment arrives with the leading '#' intact (tokenize preserves
-    it). We search for the tag anywhere in the comment body (case
-    insensitive, word boundary) and return the cleaned text with the
-    '#' stripped.
+    it). We search for the tag anywhere in the comment body and return
+    the cleaned text with the '#' stripped. Only ALL-CAPS tags match
+    (the universal dev convention); see `_TAG_RE` comment for why.
     """
     m = _TAG_RE.search(comment)
     if not m:
