@@ -3,16 +3,17 @@
 Calls the existing engines and stitches their results into one document, so
 the user gets a complete "state of the repo" view from a single CLI invocation.
 
-The report has seven fixed sections plus an optional drift section when a
+The report has eight fixed sections plus an optional drift section when a
 baseline is supplied:
   1. Headline numbers (files, symbols, calls, resolution rate)
   2. Hotspots (top complexity)
   3. Long functions (top by line count)
-  4. God files (top by composite score)
-  5. Dead code (top dead candidates)
-  6. Unused imports (top files with most unused imports)
-  7. Circular dependencies (full list)
-  8. Drift since baseline (only when --baseline is provided)
+  4. God files — high fan-in (top by composite score)
+  5. Client hubs — high fan-out (files importing many others)
+  6. Dead code (top dead candidates)
+  7. Unused imports (top files with most unused imports)
+  8. Circular dependencies (full list)
+  9. Drift since baseline (only when --baseline is provided)
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from jarvis_graph.complexity_engine import find_complexity
 from jarvis_graph.db import connect
 from jarvis_graph.dead_code_engine import find_dead_code
 from jarvis_graph.drift_engine import compute_drift, render_drift_markdown
+from jarvis_graph.fan_out_engine import find_high_fan_out
 from jarvis_graph.god_files_engine import find_god_files
 from jarvis_graph.long_functions_engine import find_long_functions
 from jarvis_graph.unused_imports_engine import find_unused_imports
@@ -103,6 +105,7 @@ def health_report(
     complexity_threshold: int = 10,
     long_threshold: int = 50,
     top_n: int = 15,
+    fan_out_threshold: int = 8,
     baseline: dict | None = None,
 ) -> HealthReport:
     repo_path = repo_path.resolve()
@@ -110,6 +113,7 @@ def health_report(
     cx = find_complexity(repo_path, threshold=complexity_threshold, limit=top_n)
     lf = find_long_functions(repo_path, threshold=long_threshold, limit=top_n)
     god = find_god_files(repo_path, limit=top_n)
+    fan_out = find_high_fan_out(repo_path, threshold=fan_out_threshold, limit=top_n)
     dead = find_dead_code(repo_path)
     unused = find_unused_imports(repo_path)
     cycles = find_circular_deps(repo_path)
@@ -194,8 +198,27 @@ def health_report(
         lines.append("_No files indexed._")
     lines.append("")
 
-    # 5. dead code
-    lines.append("## 5. Dead code candidates")
+    # 5. client hubs (fan-out)
+    lines.append(f"## 5. Client hubs — high fan-out (≥ {fan_out_threshold} in-repo imports)")
+    lines.append("")
+    lines.append(f"- {len(fan_out.files)} file(s) above threshold "
+                 f"of {fan_out.total_files} total")
+    lines.append("")
+    if fan_out.files:
+        lines.append("| # | fan-out | %repo | imports | risk | file |")
+        lines.append("|--:|--:|--:|--:|---|---|")
+        for i, fo in enumerate(fan_out.files, 1):
+            pct = round(fo.fan_out_pct * 100, 1)
+            lines.append(
+                f"| {i} | {fo.fan_out} | {pct}% | {fo.imports_total} | "
+                f"{fo.risk} | `{fo.rel_path}` |"
+            )
+    else:
+        lines.append("_None over threshold._")
+    lines.append("")
+
+    # 6. dead code
+    lines.append("## 6. Dead code candidates")
     lines.append("")
     lines.append(f"- {len(dead.dead)} candidates after filtering "
                  f"{dead.total_checked} symbols")
@@ -218,8 +241,8 @@ def health_report(
         lines.append("_None._")
     lines.append("")
 
-    # 6. unused imports
-    lines.append("## 6. Unused imports")
+    # 7. unused imports
+    lines.append("## 7. Unused imports")
     lines.append("")
     lines.append(f"- {len(unused.unused)} unused of {unused.total_imports} imports")
     lines.append("")
@@ -234,8 +257,8 @@ def health_report(
         lines.append("_None._")
     lines.append("")
 
-    # 7. circular deps
-    lines.append("## 7. Circular dependencies")
+    # 8. circular deps
+    lines.append("## 8. Circular dependencies")
     lines.append("")
     lines.append(f"- {len(cycles.cycles)} cycle(s) on "
                  f"{cycles.total_files} files / {cycles.total_edges} resolved edges")
@@ -294,6 +317,20 @@ def health_report(
             }
             for g in god.files
         ],
+        "fan_out": {
+            "count": len(fan_out.files),
+            "threshold": fan_out_threshold,
+            "files": [
+                {
+                    "path": fo.rel_path,
+                    "fan_out": fo.fan_out,
+                    "imports_total": fo.imports_total,
+                    "imports_resolved": fo.imports_resolved,
+                    "risk": fo.risk,
+                }
+                for fo in fan_out.files
+            ],
+        },
         "dead_code": {
             "count": len(dead.dead),
             "symbols": [

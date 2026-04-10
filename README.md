@@ -4,7 +4,7 @@ A tiny **local** code-intelligence index for Python repos.
 Stdlib only. No embeddings. No daemons. No external services.
 Runs on Win10, Python 3.11, in seconds, on a 9-year-old i5 with 8 GB RAM.
 
-It answers eleven questions about a repo:
+It answers twelve questions about a repo:
 
 1. **`query`** — *where does this concept live?*  (with `--and` for strict AND across tokens, plus a recency boost)
 2. **`context`** — *what is this symbol or file's role?*
@@ -16,7 +16,8 @@ It answers eleven questions about a repo:
 8. **`find_complexity`** — *which functions are too tangled?* (McCabe cyclomatic, low → extreme buckets)
 9. **`find_long_functions`** — *which functions are over the line-count threshold?*
 10. **`find_god_files`** — *which files do too much?* (composite of symbol count × LOC × fan-in)
-11. **`health_report`** — *one Markdown file aggregating all of the above. With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section.*
+11. **`find_high_fan_out`** — *which files import too much of the rest of the repo?* (the symmetric counterpart to `find_god_files` — high fan-out flags client hubs that break first when their many dependencies move)
+12. **`health_report`** — *one Markdown file aggregating all of the above. With `--baseline FILE` it diffs against a previous JSON snapshot and adds a "Drift since baseline" section.*
 
 Plus a free helper: **`summary`** — a deterministic per-repo snapshot.
 
@@ -66,10 +67,11 @@ python -m jarvis_graph find_dead_code      C:\JARVIS --limit 20
 python -m jarvis_graph find_unused_imports C:\JARVIS --limit 20
 python -m jarvis_graph find_circular_deps  C:\JARVIS
 
-:: 4. find complexity / size hotspots
+:: 4. find complexity / size / coupling hotspots
 python -m jarvis_graph find_complexity     C:\JARVIS --threshold 10
 python -m jarvis_graph find_long_functions C:\JARVIS --threshold 50
 python -m jarvis_graph find_god_files      C:\JARVIS --limit 15
+python -m jarvis_graph find_high_fan_out   C:\JARVIS --threshold 8
 
 :: 5. one report to rule them all
 python -m jarvis_graph health_report       C:\JARVIS --out HEALTH.md
@@ -145,7 +147,8 @@ jarvis-graph [--color auto|always|never] [--no-color] <subcommand> ...
   find_complexity     <repo> [--threshold N] [--limit N] [--json]
   find_long_functions <repo> [--threshold N] [--limit N] [--json]
   find_god_files      <repo> [--limit N]               [--json]
-  health_report       <repo> [--out FILE] [--top-n N] [--baseline FILE] [--save-baseline FILE]  [--json]
+  find_high_fan_out   <repo> [--threshold N] [--limit N] [--json]
+  health_report       <repo> [--out FILE] [--top-n N] [--fan-out-threshold N] [--baseline FILE] [--save-baseline FILE]  [--json]
 ```
 
 `<symbol-or-file>` resolves in this order: exact qualified name → qualified-name suffix (for dotted `Class.method`) → parent-qname suffix (for `Class.method` where `Class` is in another module) → exact symbol name → file path substring.

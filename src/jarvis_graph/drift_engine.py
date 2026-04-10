@@ -50,6 +50,7 @@ _SCALAR_SPECS: list[tuple[str, str, str]] = [
     ("dead code candidates",           "dead_code.count",                      "down"),
     ("unused imports",                 "unused_imports.count",                 "down"),
     ("import cycles",                  "cycles.count",                         "down"),
+    ("high fan-out files",             "fan_out.count",                        "down"),
 ]
 
 
@@ -237,6 +238,7 @@ def compute_drift(baseline: dict | None, current: dict) -> DriftReport:
         ("complexity hotspots",  "complexity.hotspots",         "qname"),
         ("long functions",       "long_functions.functions",    "qname"),
         ("god files",            "god_files",                   "path"),
+        ("client hubs (fan-out)", "fan_out.files",              "path"),
         ("dead code symbols",    "dead_code.symbols",           "qname"),
         ("hot unused-import files", "unused_imports.top_files", "path"),
     ]
@@ -252,12 +254,12 @@ def compute_drift(baseline: dict | None, current: dict) -> DriftReport:
 
 
 def render_drift_markdown(report: DriftReport) -> str:
-    """Render a single Markdown section ('## 8. Drift since baseline')."""
+    """Render a single Markdown section ('## 9. Drift since baseline')."""
     if not report.has_baseline:
         return ""
 
     lines: list[str] = []
-    lines.append("## 8. Drift since baseline")
+    lines.append("## 9. Drift since baseline")
     lines.append("")
     lines.append(
         f"- **{report.regression_count}** regression(s), "

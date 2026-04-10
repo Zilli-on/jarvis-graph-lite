@@ -28,6 +28,10 @@ Things that were considered and **explicitly left out**, with the trigger that w
 
 - **Baseline drift on `health_report`** (`drift_engine.compute_drift`). Loads a previous `health_report --json` snapshot via `--baseline FILE` and renders a "Drift since baseline" section showing scalar drift (worsened / improved / neutral per metric) and set drift (newly-entered and newly-left lists for hotspots, dead code, cycles, …). The summary payload was enriched to carry the top-N lists with stable ids so set diff is keyed by `qualified_name` / `rel_path`. Skips set diff entirely when the baseline is missing a list — protects against false-positive regressions when the baseline came from an older tool version.
 
+## Promoted out of this file in v0.6
+
+- **High fan-out detection** (`find_high_fan_out`). Symmetric counterpart to `find_god_files`: instead of asking "which file is imported by too many others?", it asks "which file imports too many others?". Same SQL pattern (one select against `import_edge`) with `COUNT(DISTINCT CASE WHEN ie.resolved_file_id ...)` so duplicate imports of the same file collapse to a single fan-out edge. `health_report` gained a section 5 ("Client hubs") and `drift_engine` tracks `fan_out.count` as a scalar metric and the file list as a set diff. Top hub on JARVIS today: `tools/jarvis-graph-lite/src/jarvis_graph/cli.py` with fan_out=14 — legitimate (the CLI aggregates every engine).
+
 ## Still deferred
 
 | Feature | Why deferred | Trigger to add |

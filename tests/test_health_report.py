@@ -22,16 +22,23 @@ class HealthReportTests(unittest.TestCase):
         cleanup(self.tmp_root)
 
     def test_report_has_all_sections(self) -> None:
-        rep = health_report(self.repo, complexity_threshold=1, long_threshold=10, top_n=5)
+        rep = health_report(
+            self.repo,
+            complexity_threshold=1,
+            long_threshold=10,
+            top_n=5,
+            fan_out_threshold=1,
+        )
         md = rep.markdown
         for section in (
             "## 1. Headline",
             "## 2. Complexity hotspots",
             "## 3. Long functions",
             "## 4. God files",
-            "## 5. Dead code candidates",
-            "## 6. Unused imports",
-            "## 7. Circular dependencies",
+            "## 5. Client hubs",
+            "## 6. Dead code candidates",
+            "## 7. Unused imports",
+            "## 8. Circular dependencies",
         ):
             self.assertIn(section, md, f"missing section: {section}")
 
@@ -70,7 +77,7 @@ class HealthReportTests(unittest.TestCase):
             top_n=5,
             baseline=rep.summary,
         )
-        self.assertIn("## 8. Drift since baseline", rep2.markdown)
+        self.assertIn("## 9. Drift since baseline", rep2.markdown)
         self.assertIn("drift", rep2.summary)
         self.assertEqual(rep2.summary["drift"]["regression_count"], 0)
 
@@ -113,7 +120,7 @@ class HealthReportTests(unittest.TestCase):
             ])
             self.assertEqual(rc2, 0)
         md = out_md2.read_text(encoding="utf-8")
-        self.assertIn("## 8. Drift since baseline", md)
+        self.assertIn("## 9. Drift since baseline", md)
         self.assertIn("0** regression(s)", md)
 
     def test_cli_baseline_missing_file_returns_error(self) -> None:

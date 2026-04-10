@@ -35,6 +35,7 @@ src/jarvis_graph/
   complexity_engine.py     # find_complexity (McCabe per callable, bucketed)
   long_functions_engine.py # find_long_functions (line_count over threshold)
   god_files_engine.py      # find_god_files (composite of symbols × LOC × fan-in)
+  fan_out_engine.py        # find_high_fan_out (distinct in-repo imports per file)
   health_report_engine.py  # health_report (Markdown aggregator over all engines)
   drift_engine.py          # compute_drift / render_drift_markdown (v0.5)
   utils.py                 # iter_python_files, to_module_path, repo_data_dir, ...
@@ -178,11 +179,25 @@ Same shape as `find_complexity` but sorts by `line_count`, also stored on the sy
 
 Composite score in a single SQL with a LEFT JOIN and a fan-in subquery counting resolved imports targeting each file. Columns: symbol count, max line offset (used as a LOC proxy), and resolved fan-in. Each component is min-max normalised across the candidate set, then averaged: `score = (sym_n/max_sym + loc/max_loc + fan_in/max_fan) / 3`. Files with zero symbols (empty `__init__.py`) are dropped before scoring.
 
+### find_high_fan_out
+
+Symmetric counterpart to `find_god_files`. Where god files measures fan-**in** (how many other files import this one), `find_high_fan_out` measures fan-**out** (how many distinct in-repo files this one imports). High fan-out flags client hubs: every change in any of their many dependencies has a non-zero chance of breaking them first. The query is one SQL select against `import_edge`:
+
+```sql
+COUNT(DISTINCT CASE
+    WHEN ie.resolved_file_id IS NOT NULL
+     AND ie.resolved_file_id != f.file_id
+    THEN ie.resolved_file_id
+END) AS fan_out
+```
+
+The `DISTINCT` collapses duplicate imports of the same file (e.g. `from x import a; from x import b` should still count as one fan-out edge), and the self-comparison drops file's-own-resolved-imports. Two side-counters travel along: `imports_total` (every recorded edge, incl. unresolved stdlib) and `imports_resolved` (subset that resolved to a file id). `fan_out_pct = fan_out / total_files`, so risk buckets generalise across repos of any size (`high` = ≥20% or ≥30 absolute, `medium` = ≥8% or ≥12, else `low`).
+
 ### health_report
 
-Calls every other engine in turn (complexity, long functions, god files, dead code, unused imports, circular deps), assembles their reports into a 7-section Markdown document, and computes a "summary" payload for JSON consumers (so other tools don't need to parse the Markdown). Top-N defaults to 15. Output goes to a file via `--out` or to stdout.
+Calls every other engine in turn (complexity, long functions, god files, **fan-out**, dead code, unused imports, circular deps), assembles their reports into an 8-section Markdown document, and computes a "summary" payload for JSON consumers (so other tools don't need to parse the Markdown). Top-N defaults to 15. Output goes to a file via `--out` or to stdout.
 
-When `--baseline FILE` is supplied, the report loads a previous JSON snapshot and adds a section 8 ("Drift since baseline") via `drift_engine`. The summary payload also gains a `drift` key with `regression_count`, `improvement_count`, and structured per-metric details. The baseline loader accepts both shapes the CLI emits: the full `{"repo_path": ..., "summary": {...}}` envelope and the bare summary payload.
+When `--baseline FILE` is supplied, the report loads a previous JSON snapshot and adds a section 9 ("Drift since baseline") via `drift_engine`. The summary payload also gains a `drift` key with `regression_count`, `improvement_count`, and structured per-metric details. The baseline loader accepts both shapes the CLI emits: the full `{"repo_path": ..., "summary": {...}}` envelope and the bare summary payload.
 
 ### drift_engine
 

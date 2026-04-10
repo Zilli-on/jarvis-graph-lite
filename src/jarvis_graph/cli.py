@@ -1,5 +1,5 @@
 """jarvis-graph CLI: index / query / context / impact / detect_changes / summary
-plus the v0.2 + v0.3 health-check engines and the v0.5 baseline drift.
+plus the v0.2 + v0.3 health-check engines, v0.5 baseline drift, and v0.6 fan-out.
 
 Usage:
     jarvis-graph index <repo>            # incremental
@@ -15,6 +15,7 @@ Usage:
     jarvis-graph find_complexity      <repo> [--threshold N] [--limit N]
     jarvis-graph find_long_functions  <repo> [--threshold N] [--limit N]
     jarvis-graph find_god_files       <repo> [--limit N]
+    jarvis-graph find_high_fan_out    <repo> [--threshold N] [--limit N]
     jarvis-graph health_report        <repo> [--out FILE] [--baseline FILE]
 
 All output is plain text by default; pass --json to any subcommand to get a
@@ -107,6 +108,7 @@ from jarvis_graph.circular_deps_engine import find_circular_deps
 from jarvis_graph.complexity_engine import find_complexity
 from jarvis_graph.context_engine import context as run_context
 from jarvis_graph.dead_code_engine import find_dead_code
+from jarvis_graph.fan_out_engine import find_high_fan_out
 from jarvis_graph.god_files_engine import find_god_files
 from jarvis_graph.health_report_engine import health_report as run_health_report
 from jarvis_graph.impact_engine import impact as run_impact
@@ -441,6 +443,29 @@ def _cmd_find_god_files(args) -> int:
     return 0
 
 
+def _cmd_find_high_fan_out(args) -> int:
+    repo = Path(args.repo)
+    rep = find_high_fan_out(repo, threshold=args.threshold, limit=args.limit)
+    if args.json:
+        _print_json(asdict(rep))
+        return 0
+    print(bold(f"find_high_fan_out: {repo.resolve()}"))
+    print(dim(
+        f"  total files: {rep.total_files}  threshold: {rep.threshold}"
+    ))
+    paint = red if rep.files else green
+    print(f"  high-fan-out files: {paint(str(len(rep.files)))}")
+    for ff in rep.files:
+        risk_paint = _RISK_COLOR.get(ff.risk, dim)
+        pct = f"{ff.fan_out_pct * 100:.1f}%"
+        print(
+            f"    [{risk_paint(str(ff.fan_out).rjust(3))}] "
+            f"({pct.rjust(6)}) imports_total={ff.imports_total:>3}  "
+            f"{_path(ff.rel_path)}"
+        )
+    return 0
+
+
 def _load_baseline_summary(path: Path) -> dict | None:
     """Load a baseline JSON snapshot.
 
@@ -474,6 +499,7 @@ def _cmd_health_report(args) -> int:
         complexity_threshold=args.complexity_threshold,
         long_threshold=args.long_threshold,
         top_n=args.top_n,
+        fan_out_threshold=args.fan_out_threshold,
         baseline=baseline_summary,
     )
     # Save snapshot to disk if requested. Done before --json/--out so a single
@@ -498,6 +524,7 @@ def _cmd_health_report(args) -> int:
         print(dim(
             f"  files={s['headline']['files']} "
             f"complexity_hotspots={s['complexity']['hotspot_count']} "
+            f"fan_out_hubs={s['fan_out']['count']} "
             f"dead_code={s['dead_code']['count']} "
             f"unused_imports={s['unused_imports']['count']} "
             f"cycles={s['cycles']['count']}"
@@ -659,11 +686,32 @@ def _build_parser() -> argparse.ArgumentParser:
     pgf.add_argument("--json", action="store_true")
     pgf.set_defaults(func=_cmd_find_god_files)
 
+    pfo = sub.add_parser(
+        "find_high_fan_out",
+        help="List files that import many other in-repo files (coupling risk)",
+    )
+    pfo.add_argument("repo")
+    pfo.add_argument(
+        "--threshold",
+        type=int,
+        default=5,
+        help="minimum distinct in-repo files imported (default 5)",
+    )
+    pfo.add_argument("--limit", type=int, default=20)
+    pfo.add_argument("--json", action="store_true")
+    pfo.set_defaults(func=_cmd_find_high_fan_out)
+
     phr = sub.add_parser("health_report", help="Generate a Markdown report combining every health signal")
     phr.add_argument("repo")
     phr.add_argument("--complexity-threshold", type=int, default=10)
     phr.add_argument("--long-threshold", type=int, default=50)
     phr.add_argument("--top-n", type=int, default=15)
+    phr.add_argument(
+        "--fan-out-threshold",
+        type=int,
+        default=8,
+        help="files with this many in-repo imports or more get flagged in section 5",
+    )
     phr.add_argument(
         "--out",
         type=str,
