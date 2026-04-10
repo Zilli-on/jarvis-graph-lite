@@ -29,8 +29,8 @@ class IndexerTests(unittest.TestCase):
         conn = connect(self.repo)
         try:
             # app.py, service.py, helpers.py, lazy_caller.py,
-            # package/__init__.py, package/worker.py
-            self.assertEqual(_count(conn, "file"), 6)
+            # plain_import_caller.py, package/__init__.py, package/worker.py
+            self.assertEqual(_count(conn, "file"), 7)
         finally:
             conn.close()
 
@@ -69,8 +69,8 @@ class IndexerTests(unittest.TestCase):
 
     def test_incremental_skips_unchanged(self) -> None:
         report = index_repo(self.repo, full=False)
-        self.assertEqual(report.files_seen, 6)
-        self.assertEqual(report.files_skipped_unchanged, 6)
+        self.assertEqual(report.files_seen, 7)
+        self.assertEqual(report.files_skipped_unchanged, 7)
         self.assertEqual(report.files_indexed, 0)
 
     def test_class_instantiation_call_resolved(self) -> None:
@@ -163,6 +163,100 @@ class IndexerTests(unittest.TestCase):
             )
         finally:
             conn.close()
+
+
+class PlainImportCallResolutionTests(unittest.TestCase):
+    """v0.12.3 regression guard for `_resolve_calls` path (a).
+
+    Pre-v0.12.3 the path (a) UPDATE used
+        substr(callee, length(callee) - length(replace(callee,'.','')) + 1)
+    which expanded to `substr(callee, num_dots + 1)` and therefore chopped
+    the first `num_dots` chars off the FRONT of the callee (e.g.
+    `helpers.format_greeting` → `elpers.format_greeting`) instead of
+    returning the last segment, so NO `import X; X.fn()` call ever
+    resolved. The bug surfaced while dogfooding jarvis-graph-lite on a
+    test file that imports amv_engine plainly and calls
+    `amv_engine.get_version_info()`.
+    """
+
+    def setUp(self) -> None:
+        self.tmp_root, self.repo = prepare_sample_repo()
+
+    def tearDown(self) -> None:
+        cleanup(self.tmp_root)
+
+    def _fetch(self, caller_qname_suffix: str, callee_name: str):
+        conn = connect(self.repo)
+        try:
+            return conn.execute(
+                """
+                SELECT ce.resolved_symbol_id,
+                       s.qualified_name AS target_qname
+                  FROM call_edge ce
+                  JOIN symbol caller ON caller.symbol_id = ce.caller_symbol_id
+             LEFT JOIN symbol s     ON s.symbol_id = ce.resolved_symbol_id
+                 WHERE caller.qualified_name LIKE ?
+                   AND ce.callee_name = ?
+                """,
+                (f"%{caller_qname_suffix}", callee_name),
+            ).fetchone()
+        finally:
+            conn.close()
+
+    def test_plain_import_module_call_resolves(self) -> None:
+        """`import helpers; helpers.format_greeting()` must resolve to
+        `helpers.format_greeting` in helpers.py."""
+        row = self._fetch("call_plain", "helpers.format_greeting")
+        self.assertIsNotNone(
+            row,
+            "expected a helpers.format_greeting call edge from call_plain",
+        )
+        self.assertIsNotNone(
+            row["resolved_symbol_id"],
+            "plain-import module.func call must resolve (v0.12.3 regression)",
+        )
+        self.assertTrue(
+            row["target_qname"].endswith("format_greeting"),
+            f"unexpected target: {row['target_qname']}",
+        )
+
+    def test_aliased_import_module_call_resolves(self) -> None:
+        """`import helpers as h_alias; h_alias.format_greeting()` must also
+        resolve when the alias is what the caller writes."""
+        row = self._fetch("call_aliased", "h_alias.format_greeting")
+        self.assertIsNotNone(
+            row,
+            "expected a h_alias.format_greeting call edge from call_aliased",
+        )
+        self.assertIsNotNone(
+            row["resolved_symbol_id"],
+            "aliased-import module.func call must resolve (v0.12.3)",
+        )
+        self.assertTrue(
+            row["target_qname"].endswith("format_greeting"),
+            f"unexpected target: {row['target_qname']}",
+        )
+
+    def test_broken_substr_does_not_match_prefix_stripped_name(self) -> None:
+        """Negative guard: make sure no symbol is accidentally resolved
+        via the pre-fix broken formula. There must be no symbol whose
+        name equals the front-stripped form of any plain-import callee.
+        This catches the specific failure mode of the old SQL."""
+        conn = connect(self.repo)
+        try:
+            # The old formula would have tried to match `s.name =
+            # "elpers.format_greeting"` — a string that has a dot in it
+            # and is never a valid symbol name.
+            row = conn.execute(
+                "SELECT 1 FROM symbol WHERE name LIKE '%.%' LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(
+            row,
+            "no symbol name should contain a dot; if one does, the old "
+            "broken substr could have accidentally matched it",
+        )
 
 
 if __name__ == "__main__":

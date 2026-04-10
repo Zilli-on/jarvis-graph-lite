@@ -280,10 +280,26 @@ def _resolve_calls(conn) -> None:
                - length(replace(call_edge.callee_name, '.', '')) = 1
         """
     )
-    # (a) dotted resolution via imports.
-    # We use the last segment of callee_name and match against any symbol in a
-    # file whose module_path matches an import of the caller's file. This is
-    # a best-effort heuristic; uncertainty is acceptable.
+    # (a) `module.func` for single-dot dotted calls where `module` is a
+    # plain `import X` (no `from`, no `as`) in the caller's file.
+    #
+    # v0.12.3: the previous formulation tried to extract the *last segment*
+    # of an arbitrary-depth dotted name via
+    #   substr(callee, length(callee) - length(replace(callee,'.','')) + 1)
+    # which expanded to `substr(callee, num_dots + 1)` — that chops
+    # `num_dots` characters from the FRONT of the callee (so for
+    # `amv_engine.get_version_info` with 1 dot it returned
+    # `"mv_engine.get_version_info"`), which matched no symbol. The bug
+    # was silent because path (a) is a fallback and earlier paths handle
+    # the common `from X import bar; bar()` case correctly; it only
+    # surfaced when dogfooding jarvis-graph-lite on a test file that uses
+    # `import amv_engine` and calls `amv_engine.func()`.
+    #
+    # The fix constrains path (a) to single-dot callees (the overwhelming
+    # majority) and uses the well-understood `instr+1` formula that m1/m2
+    # already use. Multi-dot chains like `a.b.c.d()` fall through
+    # unresolved — same as before, since the old formula never resolved
+    # them either.
     conn.execute(
         """
         UPDATE call_edge
@@ -293,23 +309,29 @@ def _resolve_calls(conn) -> None:
                  JOIN file f         ON f.file_id = s.file_id
                  JOIN symbol caller  ON caller.symbol_id = call_edge.caller_symbol_id
                  JOIN import_edge ie ON ie.file_id = caller.file_id
-                                    AND (ie.imported_module = f.module_path
-                                         OR ie.imported_name =
-                                            substr(call_edge.callee_name,
-                                                   instr(call_edge.callee_name,'.')+1))
-                WHERE s.name = (
-                    CASE WHEN instr(call_edge.callee_name,'.') > 0
-                         THEN substr(call_edge.callee_name,
-                                     length(call_edge.callee_name) -
-                                     length(replace(call_edge.callee_name,'.','')) + 1)
-                         ELSE call_edge.callee_name
-                    END
-                )
+                                    AND ie.resolved_file_id = f.file_id
+                                    AND ie.imported_name IS NULL
+                                    AND (
+                                        ie.alias = substr(
+                                            call_edge.callee_name, 1,
+                                            instr(call_edge.callee_name, '.') - 1)
+                                        OR (
+                                            ie.alias IS NULL
+                                            AND ie.imported_module = substr(
+                                                call_edge.callee_name, 1,
+                                                instr(call_edge.callee_name, '.') - 1)
+                                        )
+                                    )
+                WHERE s.name = substr(
+                      call_edge.callee_name,
+                      instr(call_edge.callee_name, '.') + 1)
                   AND s.kind IN ('function', 'method', 'class')
                 LIMIT 1
            )
          WHERE resolved_symbol_id IS NULL
            AND instr(call_edge.callee_name, '.') > 0
+           AND length(call_edge.callee_name)
+               - length(replace(call_edge.callee_name, '.', '')) = 1
         """
     )
 

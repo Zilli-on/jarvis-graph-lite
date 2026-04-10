@@ -22,7 +22,7 @@ class DetectChangesTests(unittest.TestCase):
         self.assertEqual(rep.modified, [])
         self.assertEqual(rep.removed, [])
         self.assertEqual(rep.recommendation, "no_changes")
-        self.assertEqual(rep.unchanged_count, 6)
+        self.assertEqual(rep.unchanged_count, 7)
 
     def test_detects_added_file(self) -> None:
         new_file = self.repo / "extra.py"
