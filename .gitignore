@@ -10,3 +10,4 @@ dist/
 
 # Repo-local index data — never committed back to a target repo
 .jarvis_graph/
+HEALTH_v0.12.3.md
