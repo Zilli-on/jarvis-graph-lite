@@ -5,9 +5,33 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jarvis-graph-lite"
 version = "0.12.4"
-description = "Repo-local code intelligence layer for Python projects. Stdlib only."
+description = "Repo-local code intelligence layer for Python projects. Stdlib only, zero dependencies."
+readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 dependencies = []
+authors = [
+    {name = "Fabi Damboeck"},
+]
+keywords = ["code-intelligence", "static-analysis", "python", "call-graph", "refactoring", "code-health"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/Zilli-on/jarvis-graph-lite"
+Repository = "https://github.com/Zilli-on/jarvis-graph-lite"
+Changelog = "https://github.com/Zilli-on/jarvis-graph-lite/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Zilli-on/jarvis-graph-lite/issues"
 
 [project.scripts]
 jarvis-graph = "jarvis_graph.cli:main"
