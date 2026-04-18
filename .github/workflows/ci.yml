@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: ruff + unittest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Ruff is dev-tooling only — never a runtime dep. We pip
+      # install it here so CI has it; pyproject.toml's
+      # `dependencies = []` stays zero-cost by design.
+      - name: Install ruff (dev-tooling; no runtime deps added)
+        run: pip install ruff
+
+      - name: Ruff lint
+        run: ruff check src tests
+
+      - name: Unittest suite (stdlib, 277+ tests expected)
+        run: python -m unittest discover -s tests -v

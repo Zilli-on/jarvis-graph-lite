@@ -38,3 +38,10 @@ jarvis-graph = "jarvis_graph.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff.lint]
+# E402 (module-import-not-at-top-of-file) is ignored project-wide
+# because several modules intentionally late-bind imports after
+# sys.path / bootstrap code. Not a defect; a pattern. New code can
+# still use E402 if justified.
+ignore = ["E402"]

@@ -134,7 +134,7 @@ def health_report(
     top_unused_files = file_unused.most_common(top_n)
 
     lines: list[str] = []
-    lines.append(f"# jarvis-graph-lite health report")
+    lines.append("# jarvis-graph-lite health report")
     lines.append("")
     lines.append(f"**Repo**: `{repo_path}`")
     lines.append("")
