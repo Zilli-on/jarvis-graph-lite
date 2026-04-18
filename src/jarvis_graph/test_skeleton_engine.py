@@ -36,6 +36,13 @@ from jarvis_graph.db import connect
 
 @dataclass
 class TestSkeleton:
+    # __test__ = False tells pytest NOT to collect this class as a test
+    # despite the Test-prefixed name. It is a dataclass describing the
+    # shape of a generated test skeleton, not a test case itself.
+    # Without this, pytest emits PytestCollectionWarning and skips the
+    # class noisily on every run.
+    __test__ = False
+
     symbol_qname: str
     symbol_kind: str
     target_module: str
@@ -58,7 +65,7 @@ def _module_import_path(rel_path: str, module_path: str) -> str:
     """
     rp = rel_path.replace("\\", "/")
     if rp.startswith("src/") and module_path.startswith("src."):
-        return module_path[len("src."):]
+        return module_path[len("src.") :]
     return module_path
 
 
@@ -161,24 +168,24 @@ def _render_function_skeleton(
     test_class = f"{_to_pascal_case(target_name)}Tests"
     return (
         f'"""Generated test skeleton for `{target_module}.{target_name}`.\n'
-        f'\n'
-        f'Created by `jarvis-graph-lite generate_test_skeleton`. Every test\n'
-        f'body raises NotImplementedError on purpose — fill them in before\n'
-        f'committing.\n'
+        f"\n"
+        f"Created by `jarvis-graph-lite generate_test_skeleton`. Every test\n"
+        f"body raises NotImplementedError on purpose — fill them in before\n"
+        f"committing.\n"
         f'"""\n'
-        f'\n'
-        f'from __future__ import annotations\n'
-        f'\n'
-        f'import unittest\n'
-        f'\n'
-        f'from {target_module} import {target_name}\n'
-        f'\n'
-        f'\n'
-        f'class {test_class}(unittest.TestCase):\n'
-        f'{_function_test_method(target_name, params)}'
-        f'\n'
+        f"\n"
+        f"from __future__ import annotations\n"
+        f"\n"
+        f"import unittest\n"
+        f"\n"
+        f"from {target_module} import {target_name}\n"
+        f"\n"
+        f"\n"
+        f"class {test_class}(unittest.TestCase):\n"
+        f"{_function_test_method(target_name, params)}"
+        f"\n"
         f'if __name__ == "__main__":\n'
-        f'    unittest.main()\n'
+        f"    unittest.main()\n"
     )
 
 
@@ -202,24 +209,24 @@ def _render_class_skeleton(
             body_parts.append("\n" + _function_test_method(mname, mparams))
     return (
         f'"""Generated test skeleton for `{target_module}.{target_name}`.\n'
-        f'\n'
-        f'Created by `jarvis-graph-lite generate_test_skeleton`. Every test\n'
-        f'body raises NotImplementedError on purpose — fill them in before\n'
-        f'committing.\n'
+        f"\n"
+        f"Created by `jarvis-graph-lite generate_test_skeleton`. Every test\n"
+        f"body raises NotImplementedError on purpose — fill them in before\n"
+        f"committing.\n"
         f'"""\n'
-        f'\n'
-        f'from __future__ import annotations\n'
-        f'\n'
-        f'import unittest\n'
-        f'\n'
-        f'from {target_module} import {target_name}\n'
-        f'\n'
-        f'\n'
-        f'class {test_class}(unittest.TestCase):\n'
+        f"\n"
+        f"from __future__ import annotations\n"
+        f"\n"
+        f"import unittest\n"
+        f"\n"
+        f"from {target_module} import {target_name}\n"
+        f"\n"
+        f"\n"
+        f"class {test_class}(unittest.TestCase):\n"
         + "".join(body_parts)
-        + '\n'
+        + "\n"
         + 'if __name__ == "__main__":\n'
-        + '    unittest.main()\n'
+        + "    unittest.main()\n"
     )
 
 
