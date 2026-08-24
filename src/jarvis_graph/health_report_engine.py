@@ -139,6 +139,19 @@ def health_report(
     lines.append(f"**Repo**: `{repo_path}`")
     lines.append("")
 
+    # An empty index makes every threshold section below print "None over
+    # threshold" / "None.", which reads as a clean bill of health for a repo
+    # that was never parsed at all — this tool indexes Python only, so a
+    # Godot or JS tree yields 0 files and an all-clear report. Say it once,
+    # up front, before any of those all-clear lines can be believed.
+    if not headline["files"]:
+        lines.append("> **WARNING - empty index: 0 files parsed.** Every "
+                     "\"none over threshold\" below means NOT MEASURED, not "
+                     "clean. jarvis-graph-lite indexes Python only: check that "
+                     "this repo has `.py` files and that they are not excluded "
+                     "by `.gitignore`.")
+        lines.append("")
+
     # 1. headline
     lines.append("## 1. Headline")
     lines.append("")
