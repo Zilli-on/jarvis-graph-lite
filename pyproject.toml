@@ -39,6 +39,13 @@ jarvis-graph = "jarvis_graph.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+# Silence the pytest-asyncio PytestDeprecationWarning on every run.
+# This project is stdlib-only with synchronous tests, but the globally
+# installed pytest-asyncio plugin still warns when this scope is unset.
+# Pin it to the future default to keep runs clean (behavior-neutral here).
+asyncio_default_fixture_loop_scope = "function"
+
 [tool.ruff.lint]
 # E402 (module-import-not-at-top-of-file) is ignored project-wide
 # because several modules intentionally late-bind imports after

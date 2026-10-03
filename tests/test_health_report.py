@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 from conftest import cleanup, prepare_extended_repo
 
 from jarvis_graph import cli
 from jarvis_graph.health_report_engine import health_report
+from jarvis_graph.indexer import index_repo
 
 
 class HealthReportTests(unittest.TestCase):
@@ -161,6 +164,51 @@ class HealthReportTests(unittest.TestCase):
         names = {s["name"] for s in drift["sets"]}
         self.assertIn("dead code symbols", names)
         self.assertIn("import cycles", names)
+
+
+class EmptyIndexTests(unittest.TestCase):
+    """A repo with no Python in it must not read as a healthy repo.
+
+    jarvis-graph-lite parses Python only. Pointed at e.g. a Godot tree it
+    indexes 0 files, and every threshold section then prints "None over
+    threshold" - an all-clear for code that was never read. The report has
+    to say so itself.
+    """
+
+    def setUp(self) -> None:
+        self.tmp_root = Path(tempfile.mkdtemp(prefix="jgl_empty_"))
+        self.repo = self.tmp_root / "godot_repo"
+        self.repo.mkdir()
+        (self.repo / "player.gd").write_text(
+            "extends Node\n\nfunc _ready():\n    pass\n", encoding="utf-8"
+        )
+        (self.repo / "README.md").write_text("# not python\n", encoding="utf-8")
+        index_repo(self.repo, full=True)
+
+    def tearDown(self) -> None:
+        cleanup(self.tmp_root)
+
+    def test_nothing_was_indexed(self) -> None:
+        rep = health_report(self.repo)
+        self.assertEqual(rep.summary["headline"]["files"], 0)
+        self.assertEqual(rep.summary["headline"]["symbols"], 0)
+
+    def test_empty_index_is_flagged_before_the_all_clears(self) -> None:
+        md = health_report(self.repo).markdown
+        self.assertIn("empty index", md.lower())
+        self.assertIn("NOT MEASURED", md)
+        # The warning has to come BEFORE the first all-clear line, otherwise a
+        # reader has already been reassured by the time they reach it.
+        self.assertLess(md.lower().index("empty index"), md.index("_None over threshold._"))
+
+    def test_populated_repo_carries_no_warning(self) -> None:
+        tmp_root, repo = prepare_extended_repo()
+        try:
+            md = health_report(repo, complexity_threshold=1, long_threshold=10).markdown
+            self.assertNotIn("empty index", md.lower())
+        finally:
+            cleanup(tmp_root)
+
 
 
 if __name__ == "__main__":

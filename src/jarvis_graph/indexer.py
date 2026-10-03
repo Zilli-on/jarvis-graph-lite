@@ -181,6 +181,12 @@ def _resolve_calls(conn) -> None:
                                own file). Covers `self.method()` rewrites.
       a)  `foo.bar`         → last segment `bar` resolved against a symbol in
                                a file reachable via caller's file imports.
+                               Only for plain `import foo` (no `from`).
+      a2) `mod.bar`         → module-level `bar` in the file whose module_path
+                               is `<package>.<mod>`, where the caller did
+                               `from <package> import mod` (optionally `as`).
+                               Covers the `from pkg import mod; mod.f()`
+                               idiom that both (a) and (c) miss.
     """
     # (b) same-file resolution — cheap and safe.
     conn.execute(
@@ -326,6 +332,54 @@ def _resolve_calls(conn) -> None:
                       call_edge.callee_name,
                       instr(call_edge.callee_name, '.') + 1)
                   AND s.kind IN ('function', 'method', 'class')
+                LIMIT 1
+           )
+         WHERE resolved_symbol_id IS NULL
+           AND instr(call_edge.callee_name, '.') > 0
+           AND length(call_edge.callee_name)
+               - length(replace(call_edge.callee_name, '.', '')) = 1
+        """
+    )
+    # (a2) `module.func` where `module` came in via `from <pkg> import module`.
+    #
+    # Path (a) only covers plain `import X`, because it requires
+    # `ie.imported_name IS NULL`. But `from <pkg> import <module>` is just as
+    # common — this very file does `from jarvis_graph import config,
+    # logging_utils` and then calls `config.load(...)`. Those import edges
+    # carry `imported_name = 'config'` and resolve to the *package's*
+    # `__init__.py`, so neither (a) (wrong import shape) nor (c) (callee is
+    # dotted) ever matched, and the call edge stayed unresolved.
+    #
+    # The effect was silent and wrong in the worst direction: `impact` on such
+    # a function reported "no resolved callers found — may be unused", and
+    # `find_coverage_gaps` counted it as unreached. A tool whose job is
+    # "what breaks if I change this" must not miss real callers.
+    #
+    # Match precisely: the callee's first segment is the imported module (or
+    # its alias), and the target symbol lives in the file whose module_path is
+    # `<package module_path>.<imported_name>`. Restricted to module-level
+    # symbols (`parent_qname IS NULL`) so `from x import Cls; Cls.method()`
+    # cannot land here — m1 already handles that shape earlier.
+    conn.execute(
+        """
+        UPDATE call_edge
+           SET resolved_symbol_id = (
+               SELECT s.symbol_id
+                 FROM symbol s
+                 JOIN file f         ON f.file_id = s.file_id
+                 JOIN symbol caller  ON caller.symbol_id = call_edge.caller_symbol_id
+                 JOIN import_edge ie ON ie.file_id = caller.file_id
+                                    AND ie.imported_name IS NOT NULL
+                                    AND COALESCE(ie.alias, ie.imported_name) = substr(
+                                        call_edge.callee_name, 1,
+                                        instr(call_edge.callee_name, '.') - 1)
+                 JOIN file pkg       ON pkg.file_id = ie.resolved_file_id
+                WHERE f.module_path = pkg.module_path || '.' || ie.imported_name
+                  AND s.parent_qname IS NULL
+                  AND s.kind IN ('function', 'class')
+                  AND s.name = substr(
+                      call_edge.callee_name,
+                      instr(call_edge.callee_name, '.') + 1)
                 LIMIT 1
            )
          WHERE resolved_symbol_id IS NULL
