@@ -1102,5 +1102,56 @@ class ColourOffCliTests(SampleRepoCliTest):
         self.assertRegex(out, r"total imports: 11")
 
 
+class _TtyBuffer(io.StringIO):
+    """Captured stdout that claims to be a terminal, so `auto` would colour."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def run_cli_tty(argv: list[str]) -> tuple[int, str]:
+    buf = _TtyBuffer()
+    with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+        rc = cli.main(argv)
+    return rc, buf.getvalue()
+
+
+class ColourAutoOnTtyCliTests(SampleRepoCliTest):
+    """`auto` on a terminal colours, unless $NO_COLOR is set.
+
+    On a captured (non-TTY) stdout `auto` is plain anyway, so only a
+    terminal can show whether $NO_COLOR is honoured at all.
+    """
+
+    def test_auto_colours_a_tty(self) -> None:
+        rc, out = run_cli_tty(["query", str(self.repo), "format_greeting"])
+        self.assertEqual(rc, 0)
+        self.assertRegex(out, ANSI_RE)
+
+    def test_no_color_env_var_wins_on_a_tty(self) -> None:
+        os.environ["NO_COLOR"] = "1"
+        rc, out = run_cli_tty(["query", str(self.repo), "format_greeting"])
+        self.assertEqual(rc, 0)
+        self.assertIn("hit(s) for: format_greeting", out)
+        self.assertNotRegex(out, ANSI_RE)
+
+
+class BareSummaryBaselineCliTests(ExtendedRepoCliTest):
+    def test_bare_summary_is_accepted_as_baseline(self) -> None:
+        # _load_baseline_summary accepts the full snapshot AND the bare
+        # summary payload; only the full shape is exercised above.
+        base = ["--no-color", "health_report", str(self.repo)]
+        snap = self.tmp_root / "snap.json"
+        rc, _, _ = run_cli([*base, "--save-baseline", str(snap)])
+        self.assertEqual(rc, 0)
+        bare = self.tmp_root / "bare.json"
+        summary = json.loads(snap.read_text(encoding="utf-8"))["summary"]
+        bare.write_text(json.dumps(summary), encoding="utf-8")
+        rc2, out, err = run_cli([*base, "--baseline", str(bare)])
+        self.assertEqual(rc2, 0, err)
+        self.assertIn("## 10. Drift since baseline", out)
+        self.assertIn("**0** regression(s)", out)
+
+
 if __name__ == "__main__":
     unittest.main()
