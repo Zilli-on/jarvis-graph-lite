@@ -47,6 +47,11 @@ where = ["src"]
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff.lint]
+# The rule set is spelled out because CI installs ruff unpinned: ruff 0.17
+# lints far more than these classic defaults, which turned CI red without a
+# line of code changing. Widening the set is a deliberate change, not an
+# upgrade side effect.
+select = ["E4", "E7", "E9", "F"]
 # E402 (module-import-not-at-top-of-file) is ignored project-wide
 # because several modules intentionally late-bind imports after
 # sys.path / bootstrap code. Not a defect; a pattern. New code can
